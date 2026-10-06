@@ -147,6 +147,14 @@ install_zlib() {
   fi
   local archive source
   archive=$(get_file 'https://zlib.net/fossils/zlib-1.1.4.tar.gz' "$work/zlib-1.1.4.tar.gz")
+  # zlib.net may return a successful HTTP response containing an HTML/rate-limit page from
+  # GitHub-hosted runners. Do not let that poison the cache: validate the gzip stream and fall
+  # back to the community's exact zlib 1.1.4 mirror, which is a single-commit source snapshot.
+  if ! gzip -t "$archive" >/dev/null 2>&1; then
+    step 'official zlib fossil was not a valid gzip archive; using the zlib 1.1.4 GitHub mirror'
+    rm -f "$archive"
+    archive=$(get_file 'https://github.com/TheSuperHackers/zlib-1.1.4/archive/refs/heads/main.zip' "$work/zlib-1.1.4.zip")
+  fi
   source=$(expand_source "$archive" 'zlib')
   local IFS=$'\n'
   copy_files "$destination" $(list_top_level "$source" '.c,.h' 'maketree.c')
