@@ -49,7 +49,7 @@ set -euo pipefail
 
 # The optional target arguments are supplied by CMake for cross builds (notably Android).
 if [ $# -lt 4 ]; then
-  echo "usage: $0 <tarball> <work dir> <install prefix> <C compiler> [<extra cflags> [<target arch>]]" >&2
+  echo "usage: $0 <tarball> <work dir> <install prefix> <C compiler> [<extra cflags> [<target arch> [<target os> [<sysroot>]]]]" >&2
   exit 2
 fi
 tarball="$1" work="$2" prefix="$3" cc="$4" extra_cflags="${5:-}" target_arch="${6:-}" target_os="${7:-}" sysroot="${8:-}"
