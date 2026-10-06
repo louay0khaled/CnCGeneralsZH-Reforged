@@ -15,9 +15,11 @@ android {
         versionCode 2
         versionName "0.2.0-native-gles"
 
-        externalNativeBuild {
-            cmake {
-                arguments "-DANDROID_PLATFORM=android-21", "-DANDROID_STL=c++_shared"
+        if (!project.hasProperty("PREBUILT_NATIVE")) {
+            externalNativeBuild {
+                cmake {
+                    arguments "-DANDROID_PLATFORM=android-21", "-DANDROID_STL=c++_shared"
+                }
             }
         }
 
