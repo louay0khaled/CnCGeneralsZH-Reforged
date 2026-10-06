@@ -47,6 +47,7 @@
 # beside the libraries as LICENSE.txt.
 set -euo pipefail
 
+# The optional target arguments are supplied by CMake for cross builds (notably Android).
 if [ $# -lt 4 ]; then
   echo "usage: $0 <tarball> <work dir> <install prefix> <C compiler> [<extra cflags> [<target arch>]]" >&2
   exit 2
