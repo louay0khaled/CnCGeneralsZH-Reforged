@@ -26,7 +26,10 @@ project(GeneralsMD CXX C)
 # refusing to configure.
 if(CMAKE_SYSTEM_NAME STREQUAL "Windows")
   set(ZH_PLATFORM_WINDOWS TRUE)
-elseif(CMAKE_SYSTEM_NAME STREQUAL "Android")
+elseif(CMAKE_SYSTEM_NAME MATCHES "^Android$" OR DEFINED CMAKE_ANDROID_NDK OR DEFINED ANDROID)
+  # Android's toolchain variables are the authoritative signal here. Some NDK/CMake
+  # combinations expose the target system name slightly differently during the early
+  # configure pass, but CMAKE_ANDROID_NDK/ANDROID are guaranteed by the Android toolchain.
   set(ZH_PLATFORM_POSIX TRUE)
   set(ZH_PLATFORM_ANDROID TRUE)
   set(CMAKE_POSITION_INDEPENDENT_CODE ON)
@@ -38,6 +41,8 @@ else()
     set(ZH_PLATFORM_LINUX TRUE)
   endif()
 endif()
+
+message(STATUS "ZH platform: system=${CMAKE_SYSTEM_NAME} posix=${ZH_PLATFORM_POSIX} android=${ZH_PLATFORM_ANDROID} ndk=${CMAKE_ANDROID_NDK}")
 
 # The other half of the split.  A target that only Windows can build is gated out below; a target
 # whose sources do not compile under clang *yet* is a different thing, and this is it.  Those stay
