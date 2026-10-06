@@ -8,7 +8,7 @@ on:
 jobs:
   renderer:
     runs-on: ubuntu-24.04
-    timeout-minutes: 45
+    timeout-minutes: 60
     steps:
       - name: Checkout
         uses: actions/checkout@v4
@@ -31,7 +31,13 @@ jobs:
       - name: Configure Android arm64
         run: |
           export ANDROID_NDK_HOME="${ANDROID_HOME}/ndk/28.2.13676358"
-          cmake -S GeneralsMD/Code -B build-android -G Ninja             -DCMAKE_BUILD_TYPE=Release             -DCMAKE_TOOLCHAIN_FILE="${ANDROID_NDK_HOME}/build/cmake/android.toolchain.cmake"             -DANDROID_ABI=arm64-v8a             -DANDROID_PLATFORM=android-28             -DCMAKE_ANDROID_NDK="${ANDROID_NDK_HOME}"             -DCMAKE_EXPORT_COMPILE_COMMANDS=ON
+          cmake -S GeneralsMD/Code -B build-android -G Ninja \
+            -DCMAKE_BUILD_TYPE=Release \
+            -DCMAKE_TOOLCHAIN_FILE="${ANDROID_NDK_HOME}/build/cmake/android.toolchain.cmake" \
+            -DANDROID_ABI=arm64-v8a \
+            -DANDROID_PLATFORM=android-28 \
+            -DCMAKE_ANDROID_NDK="${ANDROID_NDK_HOME}" \
+            -DCMAKE_EXPORT_COMPILE_COMMANDS=ON
 
       - name: Build GLES renderer and native game
         id: build
@@ -47,28 +53,150 @@ jobs:
           echo "Build exit code: ${status}"
           exit 0
 
-      - name: Collect build error summary
+      - name: Package installable Android APK
+        id: package
+        if: always()
+        continue-on-error: true
+        shell: bash
+        run: |
+          set +e
+          set -o pipefail
+          rm -f android-package.log android-package-exit-code.txt
+
+          build_status="$(cat build-exit-code.txt 2>/dev/null || printf '1')"
+          if [ "${build_status}" -ne 0 ]; then
+            echo "Native build failed; APK packaging skipped."
+            printf '%s\n' "1" > android-package-exit-code.txt
+            exit 0
+          fi
+
+          rm -rf android-app
+          cp -a GeneralsMD/Code/Libraries/Source/SDL3/android-project android-app
+          chmod +x android-app/gradlew
+
+          main_so="$(find build-android -type f -name 'libmain.so' -print -quit)"
+          sdl_so="$(find build-android -type f -name 'libSDL3.so' -print -quit)"
+          if [ -z "${main_so}" ] || [ -z "${sdl_so}" ]; then
+            echo "ERROR: expected libmain.so and libSDL3.so were not produced."
+            printf '%s\n' "1" > android-package-exit-code.txt
+            exit 0
+          fi
+
+          mkdir -p android-app/app/libs/arm64-v8a
+          cp -f "${main_so}" android-app/app/libs/arm64-v8a/libmain.so
+          cp -f "${sdl_so}" android-app/app/libs/arm64-v8a/libSDL3.so
+
+          ndk_readelf="${ANDROID_HOME}/ndk/28.2.13676358/toolchains/llvm/prebuilt/linux-x86_64/bin/llvm-readelf"
+          echo "Native dependencies:" | tee -a android-package.log
+          "${ndk_readelf}" -d android-app/app/libs/arm64-v8a/libmain.so | grep NEEDED | tee -a android-package.log || true
+          "${ndk_readelf}" -d android-app/app/libs/arm64-v8a/libSDL3.so | grep NEEDED | tee -a android-package.log || true
+
+          if "${ndk_readelf}" -d android-app/app/libs/arm64-v8a/libmain.so android-app/app/libs/arm64-v8a/libSDL3.so | grep -q 'libc++_shared.so'; then
+            libcxx="${ANDROID_HOME}/ndk/28.2.13676358/toolchains/llvm/prebuilt/linux-x86_64/sysroot/usr/lib/aarch64-linux-android/libc++_shared.so"
+            if [ ! -f "${libcxx}" ]; then
+              echo "ERROR: libc++_shared.so is required but was not found."
+              printf '%s\n' "1" > android-package-exit-code.txt
+              exit 0
+            fi
+            cp -f "${libcxx}" android-app/app/libs/arm64-v8a/libc++_shared.so
+          fi
+
+          cat > android-app/app/build.gradle <<'EOF'
+          plugins {
+              id 'com.android.application'
+          }
+
+          android {
+              namespace = "com.louay.generalszh"
+              compileSdkVersion 35
+
+              defaultConfig {
+                  applicationId "com.louay.generalszh"
+                  minSdkVersion 28
+                  targetSdkVersion 35
+                  versionCode 1
+                  versionName "0.1.0-native-gles"
+
+                  ndk {
+                      abiFilters 'arm64-v8a'
+                  }
+              }
+
+              sourceSets {
+                  main {
+                      jniLibs.srcDir 'libs'
+                  }
+              }
+
+              buildTypes {
+                  debug {
+                      minifyEnabled false
+                  }
+                  release {
+                      minifyEnabled false
+                  }
+              }
+
+              lint {
+                  abortOnError false
+              }
+          }
+
+          dependencies {
+              implementation fileTree(include: ['*.jar'], dir: 'libs')
+          }
+          EOF
+
+          python3 - <<'PY'
+          from pathlib import Path
+          p = Path("android-app/app/src/main/AndroidManifest.xml")
+          s = p.read_text()
+          s = s.replace('<manifest xmlns:android="http://schemas.android.com/apk/res/android"',
+                        '<manifest xmlns:android="http://schemas.android.com/apk/res/android"')
+          if 'android.permission.INTERNET' not in s:
+              s = s.replace('    <!-- Allow access to Internet -->', '    <uses-permission android:name="android.permission.INTERNET" />\n\n    <!-- Allow access to Internet -->')
+          s = s.replace('android:name="SDLActivity"', 'android:name="org.libsdl.app.SDLActivity"')
+          p.write_text(s)
+          PY
+
+          cat > android-app/app/src/main/res/values/strings.xml <<'EOF'
+          <resources>
+              <string name="app_name">Command &amp; Conquer: Generals Zero Hour</string>
+          </resources>
+          EOF
+
+          (
+            cd android-app
+            ./gradlew :app:assembleDebug --no-daemon --stacktrace
+          ) 2>&1 | tee android-package.log
+
+          status=${PIPESTATUS[0]}
+          printf '%s\n' "${status}" > android-package-exit-code.txt
+          echo "APK packaging exit code: ${status}"
+          if [ "${status}" -eq 0 ]; then
+            test -s android-app/app/build/outputs/apk/debug/app-debug.apk
+          fi
+          exit 0
+
+      - name: Collect build and packaging error summary
         if: always()
         shell: bash
         run: |
           {
-            echo "Android GLES build error summary"
-            echo "================================"
+            echo "Android GLES build + APK packaging summary"
+            echo "=========================================="
             echo
-            if [ -f build-exit-code.txt ]; then
-              echo "Build exit code: $(cat build-exit-code.txt)"
-            else
-              echo "Build exit code: unknown"
-            fi
+            echo "Native build exit code: $(cat build-exit-code.txt 2>/dev/null || printf 'unknown')"
+            echo "APK packaging exit code: $(cat android-package-exit-code.txt 2>/dev/null || printf 'unknown')"
             echo
-            echo "Error count:"
-            grep -Ec 'error:|FAILED:|undefined reference|incompatible with|linker command failed|ninja: build stopped' build.log 2>/dev/null || true
-            echo
-            echo "Relevant diagnostics:"
+            echo "Native build diagnostics:"
             grep -E 'error:|FAILED:|undefined reference|incompatible with|linker command failed|ninja: build stopped' build.log 2>/dev/null || true
+            echo
+            echo "APK packaging diagnostics:"
+            grep -E 'FAILURE:|What went wrong:|Execution failed|ERROR:|error:|Could not resolve|SDK location not found' android-package.log 2>/dev/null || true
           } > build-error-summary.txt
 
-      - name: Upload full build log
+      - name: Upload full native build log
         if: always()
         uses: actions/upload-artifact@v4
         with:
@@ -85,8 +213,27 @@ jobs:
           path: |
             build-error-summary.txt
             build-exit-code.txt
+            android-package-exit-code.txt
           if-no-files-found: warn
           retention-days: 7
+
+      - name: Upload APK packaging log
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: android-apk-package-log
+          path: android-package.log
+          if-no-files-found: warn
+          retention-days: 7
+
+      - name: Upload installable APK
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: generalszh-android-debug-apk
+          path: android-app/app/build/outputs/apk/debug/app-debug.apk
+          if-no-files-found: error
+          retention-days: 14
 
       - name: Upload build diagnostics
         if: always()
@@ -99,13 +246,23 @@ jobs:
           if-no-files-found: warn
           retention-days: 7
 
-      - name: Preserve build failure status
+      - name: Preserve final build status
         if: always()
         shell: bash
         run: |
-          status="$(cat build-exit-code.txt 2>/dev/null || printf '1')"
-          case "${status}" in
-            ''|*[!0-9]*) echo "Invalid build exit code: ${status}"; exit 1 ;;
-          esac
-          echo "Final build exit code: ${status}"
-          exit "${status}"
+          build_status="$(cat build-exit-code.txt 2>/dev/null || printf '1')"
+          package_status="$(cat android-package-exit-code.txt 2>/dev/null || printf '1')"
+
+          for status in "${build_status}" "${package_status}"; do
+            case "${status}" in
+              ''|*[!0-9]*) echo "Invalid status: ${status}"; exit 1 ;;
+            esac
+          done
+
+          echo "Native build exit code: ${build_status}"
+          echo "APK packaging exit code: ${package_status}"
+
+          if [ "${build_status}" -ne 0 ]; then
+            exit "${build_status}"
+          fi
+          exit "${package_status}"
