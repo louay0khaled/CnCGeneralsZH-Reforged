@@ -1,7 +1,7 @@
 diff --git a/src/common/linux/gsthreadlinux.c b/src/common/linux/gsthreadlinux.c
 --- a/src/common/linux/gsthreadlinux.c
 +++ b/src/common/linux/gsthreadlinux.c
-@@ -68,11 +68,16 @@ int gsiStartThread(GSThreadFunc func, gsi_u32 theStackSize, void* arg, GSIThreadID* id)
+@@ -67,13 +67,20 @@
  void gsiCancelThread(GSIThreadID id)
  {
      //should i destroy the attributes here?
@@ -9,8 +9,8 @@ diff --git a/src/common/linux/gsthreadlinux.c b/src/common/linux/gsthreadlinux.c
  
 +#if defined(__ANDROID__)
 +    // Android's bionic pthread implementation does not expose pthread_cancel.
-+    // GameSpy's shutdown polling reports the thread as stopped, so detach it and
-+    // let the thread finish cooperatively instead of using non-portable async cancellation.
++    // The pthread resource is released by detaching it; the thread is allowed to
++    // finish naturally because this SDK has no cooperative cancellation hook.
 +    pthread_detach(id.thread);
 +#else
      if (pthread_cancel(id.thread) != PTHREAD_NO_ERROR) {
