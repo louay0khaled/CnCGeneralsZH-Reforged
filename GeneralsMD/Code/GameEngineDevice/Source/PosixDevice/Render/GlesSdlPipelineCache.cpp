@@ -618,6 +618,17 @@ SDL_GPUGraphicsPipeline *SdlPipelineCache::Pipeline(const SdlPipelineKey &key)
 // ------------------------------------------------------------------------------------------------
 // Samplers.
 
+size_t SdlSamplerCache::KeyHash::operator()(const Key &key) const
+{
+    // FNV-1a over the complete 14-state sampler key.
+    const unsigned char *bytes = reinterpret_cast<const unsigned char *>(key.States);
+    uint64_t hash = 14695981039346656037ull;
+    for (size_t i = 0; i < sizeof(key.States); ++i) {
+        hash = (hash ^ bytes[i]) * 1099511628211ull;
+    }
+    return (size_t)hash;
+}
+
 SdlSamplerCache::SdlSamplerCache(SDL_GPUDevice *device) :
     Device(device),
     LastSampler(NULL),
