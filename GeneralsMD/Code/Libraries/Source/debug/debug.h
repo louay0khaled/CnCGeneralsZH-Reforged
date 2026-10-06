@@ -22,7 +22,7 @@
 // $Revision: #1 $
 // $DateTime: 2003/07/03 11:55:26 $
 //
-// ©2003 Electronic Arts
+// Â©2003 Electronic Arts
 //
 // Debugging module
 //////////////////////////////////////////////////////////////////////////////
@@ -88,24 +88,33 @@
 	#error "Only either _DEBUG or _INTERNAL should ever be defined"
 #endif
 
-// Define which libraries to use. 
+// Define which libraries to use.  MSVC resolves these automatically; other
+// toolchains link the corresponding targets through CMake.
 #if defined(_INTERNAL)
-#  pragma comment (lib,"debuginternal.lib")
+#  if defined(_MSC_VER)
+#    pragma comment (lib,"debuginternal.lib")
+#  endif
 #  define HAS_ASSERTS
 #  define HAS_LOGS
 #  define HAS_OPT
 #elif defined(_DEBUG)
-#  pragma comment (lib,"debugdebug.lib")
+#  if defined(_MSC_VER)
+#    pragma comment (lib,"debugdebug.lib")
+#  endif
 #  define HAS_ASSERTS
 #  define HAS_LOGS
 #elif defined(_PROFILE)
-#  pragma comment (lib,"debugprofile.lib")
+#  if defined(_MSC_VER)
+#    pragma comment (lib,"debugprofile.lib")
+#  endif
 #  define HAS_ASSERTS
 #  define HAS_LOGS
 #  define HAS_OPT
 #  define HAS_PROFILE
 #else
-#  pragma comment (lib,"debug.lib")
+#  if defined(_MSC_VER)
+#    pragma comment (lib,"debug.lib")
+#  endif
 #  define HAS_OPT
 #endif
 
