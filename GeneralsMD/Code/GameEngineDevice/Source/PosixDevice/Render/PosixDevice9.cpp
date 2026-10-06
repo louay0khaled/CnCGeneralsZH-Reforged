@@ -218,7 +218,11 @@ RenderResult PosixDevice9::Create_Gpu_Frame(bool offscreen)
 		fprintf(stderr, "PosixDevice9: a window, and no SDL3 GPU device for it: %s\n", error.c_str());
 		return D3DERR_NOTAVAILABLE;
 	}
+	#if defined(__ANDROID__)
+	Set_Renderer_Name("GLES");
+#else
 	Set_Renderer_Name(SDL_GetGPUDeviceDriver(Gpu->Device()));
+#endif
 	Programs = new SdlProgramCache(Gpu->Device());
 	Pipelines = new SdlPipelineCache(Gpu->Device());
 	Pipelines->Describe_Shader = [this](const SDL_GPUShader *shader) { return Programs->Key_Of(shader); };

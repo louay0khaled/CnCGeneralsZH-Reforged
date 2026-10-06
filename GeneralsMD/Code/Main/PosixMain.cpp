@@ -279,6 +279,54 @@ static bool chooseFolderFromScript( PosixInstallQuestion question, const std::st
 	* EarlyCommandLine.h, whose values end at a space, because a path may have one. */
 static Bool chooseInstallRoot( int argc, char *argv[], const std::vector<std::string> &overlays, char *out, size_t outSize )
 {
+#if defined(__ANDROID__)
+	// Android has no useful desktop folder chooser in the pre-engine bootstrap. Use the application's
+	// public external-files directory so the player can copy their own Zero Hour data there.
+	// Explicit -root remains available for development builds.
+	for (int i = 1; i + 1 < argc; ++i)
+	{
+		if (strcasecmp( argv[i], "-root" ) == 0)
+		{
+			const std::string explicitRoot( argv[i + 1] );
+			if (explicitRoot.size() + 1 <= outSize)
+			{
+				strcpy( out, explicitRoot.c_str() );
+				return TRUE;
+			}
+		}
+	}
+
+	const char *external = SDL_GetAndroidExternalStoragePath();
+	if (external != NULL && external[0] != '\0')
+	{
+		const std::string base( external );
+		const std::string candidates[] = { base + "/game", base + "/Zero Hour", base };
+		for (size_t i = 0; i < sizeof( candidates ) / sizeof( candidates[0] ); ++i)
+		{
+			if (PosixCheckInstallFolder( candidates[i], overlays ) == INSTALL_OK)
+			{
+				if (candidates[i].size() + 1 > outSize)
+					return FALSE;
+				strcpy( out, candidates[i].c_str() );
+				fprintf( stderr, "generals: Android game root %s\n", candidates[i].c_str() );
+				return TRUE;
+			}
+		}
+	}
+
+	const char *where = external != NULL ? external : "(Android external-files directory unavailable)";
+	char problem[ 1400 ];
+	snprintf( problem, sizeof( problem ),
+		"Zero Hour Reforged could not find the game data.\\n\\n"
+		"Copy your own Generals Zero Hour files into:\\n%s\\n\\n"
+		"The folder must contain INIZH.big and the original Generals Textures.big "
+		"(normally inside ZH_Generals).\\n\\n"
+		"EA game data is not included with this application.",
+		where );
+	fprintf( stderr, "generals: %s\n", problem );
+	SDL_ShowSimpleMessageBox( SDL_MESSAGEBOX_ERROR, "Zero Hour Reforged", problem, NULL );
+	return FALSE;
+#else
 	PosixInstallRequest request;
 	Bool unattended = FALSE;
 	for (int i = 1; i < argc; ++i)
@@ -346,6 +394,7 @@ static Bool chooseInstallRoot( int argc, char *argv[], const std::vector<std::st
 		return FALSE;
 	strcpy( out, choice.root.c_str() );
 	return TRUE;
+#endif
 }
 
 /** A package's art overlay, the macOS app's or a Linux package's: "<user data>/ReforgedArt", when it is a

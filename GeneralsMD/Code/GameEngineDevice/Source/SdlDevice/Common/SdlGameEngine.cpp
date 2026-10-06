@@ -29,6 +29,7 @@
 #include "SdlDevice/Common/SdlGameEngine.h"
 #include "SdlDevice/Common/SdlMessageBox.h"
 #include "SdlDevice/GameClient/SdlInput.h"
+#include "SdlDevice/GameClient/TouchInput.h"
 #include "SdlDevice/GameClient/SdlMouse.h"
 #include "W3DDevice/GameClient/W3DGameClient.h"
 #include "PosixDevice/Common/PosixFileResolutionDump.h"
@@ -199,6 +200,11 @@ void SdlGameEngine::createWindow( void )
 		 mapped from the window's points (SdlInput_toGamePixels).  Where points are pixels (X11, gamescope) this
 		 changes nothing. */
 	SDL_WindowFlags flags = SDL_WINDOW_HIGH_PIXEL_DENSITY;
+#if defined(__ANDROID__)
+	// Android's native renderer is OpenGL ES. The renderer creates the ES 3.0 context after the
+	// window exists; this flag makes SDL expose the correct EGL-backed surface to SDL_GL_CreateContext.
+	flags = (SDL_WindowFlags)(flags | SDL_WINDOW_OPENGL);
+#endif
 	if (!m_request.windowed)
 		flags |= SDL_WINDOW_FULLSCREEN;
 	if (m_request.hidden)
@@ -339,6 +345,9 @@ void SdlGameEngine::serviceWindowsOS( void )
 
 			case SDL_EVENT_WINDOW_FOCUS_LOST:
 				setIsActive( FALSE );
+#if defined(__ANDROID__)
+				TouchInput::reset();
+#endif
 				break;
 
 			default:
@@ -346,6 +355,9 @@ void SdlGameEngine::serviceWindowsOS( void )
 				break;
 		}
 	}
+#if defined(__ANDROID__)
+	TouchInput::update((UnsignedInt)(SDL_GetTicks()));
+#endif
 }
 
 // Win32GameEngine's factories, the same W3D classes (decision 8); the radar too: W3DRadar, and
