@@ -352,7 +352,7 @@ static Bool chooseInstallRoot( int argc, char *argv[], const std::vector<std::st
 	fprintf( stderr, "generals: %s (state directory: %s)\n", problem, where );
 	SDL_ShowSimpleMessageBox( SDL_MESSAGEBOX_ERROR, "Zero Hour Reforged", problem, NULL );
 	return FALSE;
-#endif
+#else
 	PosixInstallRequest request;
 	Bool unattended = FALSE;
 	for (int i = 1; i < argc; ++i)
