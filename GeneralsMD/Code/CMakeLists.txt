@@ -27,11 +27,8 @@ project(GeneralsMD CXX C)
 if(CMAKE_SYSTEM_NAME STREQUAL "Windows")
   set(ZH_PLATFORM_WINDOWS TRUE)
 elseif(CMAKE_SYSTEM_NAME STREQUAL "Android")
-  # Android uses the POSIX engine/device implementation, but has its own window/render/input/storage
-  # constraints. Keep it distinct so Android never accidentally takes Linux desktop policy.
   set(ZH_PLATFORM_POSIX TRUE)
   set(ZH_PLATFORM_ANDROID TRUE)
-  # Every static library that is folded into libmain.so must use PIC on Android.
   set(CMAKE_POSITION_INDEPENDENT_CODE ON)
 else()
   set(ZH_PLATFORM_POSIX TRUE)
@@ -113,12 +110,6 @@ endif()
 # depend on the two 32-bit DLLs the game shipped with.  Nothing here is written for x86 any more.
 if(NOT ZH_PLATFORM_ANDROID AND NOT CMAKE_SIZEOF_VOID_P EQUAL 8)
   message(FATAL_ERROR "Configure for x64: cmake -A x64")
-endif()
-
-# Android starts with one native ABI. The renderer/resource path is 64-bit clean and GLES is
-# intentionally developed against arm64-v8a before adding a second ABI.
-if(ZH_PLATFORM_ANDROID AND NOT CMAKE_ANDROID_ARCH_ABI STREQUAL "arm64-v8a")
-  message(FATAL_ERROR "Android build must use arm64-v8a")
 endif()
 
 set(WW ${CMAKE_CURRENT_SOURCE_DIR}/Libraries/Source/WWVegas)
@@ -893,34 +884,24 @@ if(ZH_PLATFORM_POSIX)
   # Off: audio (miniaudio has that job), render (SDL's 2D renderer; D4 uses the GPU API directly),
   # camera, joystick, haptic, hidapi, power, sensor and tray, and the OpenGL/GLES video drivers, which
   # the GPU API does not use.  Tests, examples and install are off.
-  foreach(_sdl_off SDL_TEST_LIBRARY SDL_TESTS SDL_EXAMPLES SDL_INSTALL SDL_UNINSTALL
+  foreach(_sdl_off SDL_SHARED SDL_TEST_LIBRARY SDL_TESTS SDL_EXAMPLES SDL_INSTALL SDL_UNINSTALL
                    SDL_AUDIO SDL_RENDER SDL_CAMERA SDL_JOYSTICK SDL_HAPTIC SDL_HIDAPI SDL_POWER
                    SDL_SENSOR SDL_TRAY SDL_OPENGL SDL_OPENGLES)
     set(${_sdl_off} OFF CACHE BOOL "" FORCE)
   endforeach()
-  set(SDL_SHARED OFF CACHE BOOL "" FORCE)
-  set(SDL_STATIC ON CACHE BOOL "" FORCE)
-  if(ZH_PLATFORM_ANDROID)
-    # SDLActivity must load the same SDL instance that the engine uses. Android therefore uses
-    # SDL3-shared so Java JNI and native engine state live in one library, while desktop keeps static SDL.
-    set(SDL_SHARED ON CACHE BOOL "" FORCE)
-    set(SDL_STATIC OFF CACHE BOOL "" FORCE)
-  endif()
-  if(ZH_PLATFORM_ANDROID)
-    # The renderer uses SDL's EGL-backed OpenGL ES context directly, not SDL_GPU.
-    set(SDL_OPENGL ON CACHE BOOL "" FORCE)
-    set(SDL_OPENGLES ON CACHE BOOL "" FORCE)
-  endif()
-  foreach(_sdl_on SDL_VIDEO SDL_GPU SDL_DIALOG)
+  foreach(_sdl_on SDL_STATIC SDL_VIDEO SDL_GPU SDL_DIALOG)
     set(${_sdl_on} ON CACHE BOOL "" FORCE)
   endforeach()
-  if(NOT ZH_PLATFORM_ANDROID)
-    set(SDL_STATIC ON CACHE BOOL "" FORCE)
-  endif()
   if(ZH_PLATFORM_ANDROID)
+    # SDLActivity loads the shared SDL library. The engine therefore uses the same SDL instance,
+    # while the renderer obtains an EGL-backed OpenGL ES 3 context through SDL's GL API.
+    set(SDL_SHARED ON CACHE BOOL "" FORCE)
+    set(SDL_STATIC OFF CACHE BOOL "" FORCE)
+    set(SDL_OPENGL ON CACHE BOOL "" FORCE)
+    set(SDL_OPENGLES ON CACHE BOOL "" FORCE)
     set(ZH_SDL3_TARGET SDL3::SDL3-shared)
   else()
-    set(ZH_SDL3_TARGET SDL3::SDL3-static)
+    set(ZH_SDL3_TARGET ${ZH_SDL3_TARGET})
   endif()
   add_subdirectory(${LIBSRC}/SDL3 ${CMAKE_CURRENT_BINARY_DIR}/SDL3)
 
@@ -1151,9 +1132,8 @@ file(STRINGS ${ZH_FINGERPRINT_MANIFEST} ZH_FINGERPRINT_FILES)
 list(TRANSFORM ZH_FINGERPRINT_FILES PREPEND ${CMAKE_CURRENT_SOURCE_DIR}/)
 
 if(ZH_PLATFORM_ANDROID)
-  # build_fingerprint is a host-side utility. During an Android cross-build an executable created
-  # here would target arm64-v8a and could not run on the x86_64 GitHub Actions host. Use the equivalent
-  # host Python implementation instead; it produces the same CRC-32 and header format.
+  # build_fingerprint is a host-side utility. An Android target executable would be arm64 and cannot
+  # execute on the x86_64 GitHub Actions runner, so use the equivalent Python host implementation.
   find_package(Python3 COMPONENTS Interpreter REQUIRED)
   set(ZH_FINGERPRINT_COMMAND
       ${Python3_EXECUTABLE} ${CMAKE_CURRENT_SOURCE_DIR}/Tools/fingerprint/build_fingerprint.py
@@ -1181,16 +1161,12 @@ add_dependencies(gameengine build_fingerprint_header)
 target_include_directories(gameengine PRIVATE ${ZH_FINGERPRINT_DIR})
 if(ZH_PLATFORM_POSIX)
   if(NOT ZH_PLATFORM_ANDROID)
-    # The executable checker is a desktop test; Android uses the same host-side generator during the build.
     add_test(NAME build_fingerprint_check
              COMMAND ${CMAKE_CURRENT_SOURCE_DIR}/Tools/fingerprint-check.sh $<TARGET_FILE:build_fingerprint>
                      ${ZH_FINGERPRINT_DIR}/BuildFingerprint.h)
   endif()
-  # The manifest still lists exactly the tracked files (skipped without git: a tarball uses it as shipped).
   add_test(NAME build_fingerprint_manifest COMMAND ${CMAKE_CURRENT_SOURCE_DIR}/Tools/fingerprint-manifest.sh --check)
   set_tests_properties(build_fingerprint_manifest PROPERTIES SKIP_RETURN_CODE 77)
-  # The manifest script on itself, in a scratch repository: a line twice fails --check with its name, and
-  # a merge stopped on a conflict (git ls-files then names a path once per stage) is refused.
   add_test(NAME fingerprint_manifest_selfcheck COMMAND ${CMAKE_CURRENT_SOURCE_DIR}/Tests/test_fingerprint_manifest.sh)
   set_tests_properties(fingerprint_manifest_selfcheck PROPERTIES SKIP_RETURN_CODE 77)
 endif()
@@ -1268,3 +1244,1661 @@ target_link_libraries(gameengine PUBLIC
 
 # B1's gate: the bytes a UnicodeString puts into the replay and network CRC, before and after
 # WideChar becomes char16_t.  Built from the REAL Xfer, XferCRC, UnicodeString, AsciiString and
+# WideCharFns sources with gameengine's own include paths and definitions, and nothing else of
+# gameengine, so it runs on every platform today rather than when gameengine links.  The
+# -fshort-wchar twin gives wchar_t MSVC's two unsigned bytes, which is the Windows model on a
+# Mac or Linux box; see Tests/test_widechar_crc_gate.cpp for what the pair proves and does not.
+# The real sources both of B1's tests are built from, and the one stub file they share.
+set(ZH_WIDECHAR_TEST_SUPPORT
+  ${GE}/Source/Common/System/Xfer.cpp ${GE}/Source/Common/System/XferCRC.cpp
+  ${GE}/Source/Common/System/UnicodeString.cpp ${GE}/Source/Common/System/AsciiString.cpp
+  ${GE}/Source/Common/System/WideCharFns.cpp ${CMAKE_CURRENT_SOURCE_DIR}/Tests/widechar_test_stubs.cpp
+  ${CMAKE_CURRENT_SOURCE_DIR}/Tests/gcc_eager_vtable_stubs.cpp)
+# XferCRC.cpp, MemoryInit.cpp and their kind open files through WWLib's zh_fopen, which off Windows is
+# a function in wwlib (C1 (d)); on Windows it is fopen, inline, and needs nothing linked.
+if(ZH_PLATFORM_POSIX)
+  set(ZH_ZHIO_LIBS wwlib wwdebug)
+endif()
+# XferCRC.cpp's htonl is Winsock's on Windows; the game gets ws2_32 through gameengine, these tests
+# build XferCRC.cpp themselves (W2).
+if(ZH_PLATFORM_WINDOWS)
+  set(ZH_XFERCRC_LIBS ws2_32)
+endif()
+function(zh_widechar_gate name)
+  add_executable(${name} ${CMAKE_CURRENT_SOURCE_DIR}/Tests/test_widechar_crc_gate.cpp ${ZH_WIDECHAR_TEST_SUPPORT})
+  target_include_directories(${name} PRIVATE $<TARGET_PROPERTY:gameengine,INCLUDE_DIRECTORIES>)
+  target_compile_definitions(${name} PRIVATE $<TARGET_PROPERTY:gameengine,COMPILE_DEFINITIONS>)
+  set_target_properties(${name} PROPERTIES CXX_STANDARD 17)
+  target_link_libraries(${name} PRIVATE ${ZH_ZHIO_LIBS} ${ZH_XFERCRC_LIBS})
+  add_test(NAME ${name} COMMAND ${name})
+endfunction()
+zh_widechar_gate(widechar_crc_gate)
+# The wide-format funnel against MSVC's legacy wide printf: %s wide, %S narrow.  Off Windows it
+# checks the hand-written formatter; on Windows the same expected strings check the real
+# _vsnwprintf.  See Tests/test_widechar_format.cpp.
+add_executable(widechar_format_selfcheck ${CMAKE_CURRENT_SOURCE_DIR}/Tests/test_widechar_format.cpp
+  ${ZH_WIDECHAR_TEST_SUPPORT})
+target_include_directories(widechar_format_selfcheck PRIVATE $<TARGET_PROPERTY:gameengine,INCLUDE_DIRECTORIES>)
+target_compile_definitions(widechar_format_selfcheck PRIVATE $<TARGET_PROPERTY:gameengine,COMPILE_DEFINITIONS>)
+set_target_properties(widechar_format_selfcheck PROPERTIES CXX_STANDARD 17)
+target_link_libraries(widechar_format_selfcheck PRIVATE ${ZH_ZHIO_LIBS} ${ZH_XFERCRC_LIBS})
+add_test(NAME widechar_format_selfcheck COMMAND widechar_format_selfcheck)
+# The game's own .csf through the real GameText.cpp, RAMFile, File and memory manager: every string
+# against an independent reading, some against their English text, and a golden hash for a Windows
+# run to diff.  Needs ZH_GAME_DATA; without it the test is Skipped (77), not Passed.  Stubs are in
+# the test file.  See Tests/test_gametext_csf.cpp.
+add_executable(gametext_csf ${CMAKE_CURRENT_SOURCE_DIR}/Tests/test_gametext_csf.cpp
+  ${GE}/Source/GameClient/GameText.cpp ${GE}/Source/Common/System/RAMFile.cpp
+  ${GE}/Source/Common/System/File.cpp ${GE}/Source/Common/System/GameMemory.cpp
+  ${GE}/Source/Common/System/MemoryInit.cpp ${GE}/Source/Common/System/UnicodeString.cpp
+  ${GE}/Source/Common/System/AsciiString.cpp ${GE}/Source/Common/System/WideCharFns.cpp)
+target_include_directories(gametext_csf PRIVATE $<TARGET_PROPERTY:gameengine,INCLUDE_DIRECTORIES>)
+target_compile_definitions(gametext_csf PRIVATE $<TARGET_PROPERTY:gameengine,COMPILE_DEFINITIONS>)
+set_target_properties(gametext_csf PROPERTIES CXX_STANDARD 17)
+target_link_libraries(gametext_csf PRIVATE ${ZH_ZHIO_LIBS})
+add_test(NAME gametext_csf COMMAND gametext_csf)
+# Strings built by a static constructor before anything starts the memory manager, as file-scope
+# LogClass objects build them: the real strings and memory manager, each string type first in one of
+# the two.  See Tests/test_premain_strings.cpp.
+foreach(name test_premain_strings test_premain_unicode)
+  add_executable(${name} ${CMAKE_CURRENT_SOURCE_DIR}/Tests/test_premain_strings.cpp
+    ${GE}/Source/Common/System/GameMemory.cpp ${GE}/Source/Common/System/MemoryInit.cpp
+    ${GE}/Source/Common/System/UnicodeString.cpp ${GE}/Source/Common/System/AsciiString.cpp
+    ${GE}/Source/Common/System/WideCharFns.cpp)
+  target_include_directories(${name} PRIVATE $<TARGET_PROPERTY:gameengine,INCLUDE_DIRECTORIES>)
+  target_compile_definitions(${name} PRIVATE $<TARGET_PROPERTY:gameengine,COMPILE_DEFINITIONS>)
+  set_target_properties(${name} PROPERTIES CXX_STANDARD 17)
+  target_link_libraries(${name} PRIVATE ${ZH_ZHIO_LIBS})
+  add_test(NAME ${name} COMMAND ${name})
+endforeach()
+target_compile_definitions(test_premain_unicode PRIVATE ZH_PREMAIN_UNICODE_FIRST)
+# GCC's eager vtables name ~AudioEventRTS from these three; they link the real memory manager and strings,
+# so only the audio event is stubbed (Tests/gcc_eager_vtable_stubs.cpp).  POSIX only: MSVC names none of it.
+if(ZH_PLATFORM_POSIX)
+  foreach(name gametext_csf test_premain_strings test_premain_unicode)
+    target_sources(${name} PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/Tests/gcc_eager_vtable_stubs.cpp)
+    target_compile_definitions(${name} PRIVATE ZH_EAGER_VTABLE_STUB_NO_POOL)
+  endforeach()
+endif()
+# GameMemory.cpp asks MSVC for the game's own library by name (#pragma comment(lib, "GameEngine"), EA's
+# way of linking its new and delete first).  These tests build GameMemory.cpp themselves and link no
+# GameEngine.lib, so they drop that request (W2).
+if(MSVC)
+  foreach(name gametext_csf test_premain_strings test_premain_unicode)
+    target_link_options(${name} PRIVATE /NODEFAULTLIB:GameEngine.lib $<$<CONFIG:Debug>:/NODEFAULTLIB:GameEngineDebug.lib>)
+  endforeach()
+endif()
+set_tests_properties(gametext_csf PROPERTIES SKIP_RETURN_CODE 77)
+# The global operator new against the alignment the ABI promises for it, on Linux, where it is also the
+# one Mesa's libLLVM gets.  See Tests/test_global_new_alignment.cpp.
+if(CMAKE_SYSTEM_NAME STREQUAL "Linux")
+  add_executable(test_global_new_alignment ${CMAKE_CURRENT_SOURCE_DIR}/Tests/test_global_new_alignment.cpp
+    ${GE}/Source/Common/System/GameMemory.cpp ${GE}/Source/Common/System/MemoryInit.cpp
+    ${GE}/Source/Common/System/UnicodeString.cpp ${GE}/Source/Common/System/AsciiString.cpp
+    ${GE}/Source/Common/System/WideCharFns.cpp ${CMAKE_CURRENT_SOURCE_DIR}/Tests/gcc_eager_vtable_stubs.cpp)
+  target_include_directories(test_global_new_alignment PRIVATE $<TARGET_PROPERTY:gameengine,INCLUDE_DIRECTORIES>)
+  target_compile_definitions(test_global_new_alignment PRIVATE $<TARGET_PROPERTY:gameengine,COMPILE_DEFINITIONS>
+    ZH_EAGER_VTABLE_STUB_NO_POOL)
+  set_target_properties(test_global_new_alignment PROPERTIES CXX_STANDARD 17)
+  target_link_libraries(test_global_new_alignment PRIVATE ${ZH_ZHIO_LIBS})
+  add_test(NAME test_global_new_alignment COMMAND test_global_new_alignment)
+endif()
+if(ZH_GAME_DATA)
+  set_tests_properties(gametext_csf PROPERTIES ENVIRONMENT "ZH_DATA_DIR=${ZH_GAME_DATA}")
+endif()
+
+# The replay header's wide strings as byte calls, sharing a stream with fwrite and fread (C1, PR (g)).
+# See Tests/test_widechar_file.cpp.
+add_executable(widechar_file_selfcheck ${CMAKE_CURRENT_SOURCE_DIR}/Tests/test_widechar_file.cpp
+  ${ZH_WIDECHAR_TEST_SUPPORT})
+target_include_directories(widechar_file_selfcheck PRIVATE $<TARGET_PROPERTY:gameengine,INCLUDE_DIRECTORIES>)
+target_compile_definitions(widechar_file_selfcheck PRIVATE $<TARGET_PROPERTY:gameengine,COMPILE_DEFINITIONS>)
+set_target_properties(widechar_file_selfcheck PROPERTIES CXX_STANDARD 17)
+target_link_libraries(widechar_file_selfcheck PRIVATE test_harness ${ZH_ZHIO_LIBS} ${ZH_XFERCRC_LIBS})
+add_test(NAME widechar_file_selfcheck COMMAND widechar_file_selfcheck)
+if(CMAKE_CXX_COMPILER_ID MATCHES "Clang|GNU")
+  zh_widechar_gate(widechar_crc_gate_msvc_model)
+  target_compile_options(widechar_crc_gate_msvc_model PRIVATE -fshort-wchar)
+  # The five wcs* functions UnicodeString.cpp calls, over two-byte units as MSVC's CRT has them:
+  # this C library was built with four-byte wchar_t and would overrun the heap.
+  target_sources(widechar_crc_gate_msvc_model PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/Tests/widechar_gate_msvc_crt.cpp)
+endif()
+
+# ===========================================================================
+# PosixDevice - the POSIX platform layer beside Win32Device (C1), a file at a time
+# ===========================================================================
+# The Win32Device classes' POSIX counterparts, for macOS and Linux alike; what only macOS has goes
+# in MacDevice.  Out of the default build on macOS for as long as gameengine is (ZH_NOT_YET_PORTABLE),
+# so drive it with --target.
+if(ZH_PLATFORM_POSIX)
+  file(GLOB_RECURSE POSIXDEVICE_SOURCES ${CMAKE_CURRENT_SOURCE_DIR}/GameEngineDevice/Source/PosixDevice/*.cpp)
+  # PosixDevice/Render is the Direct3D 9-shaped device (decision 7), a library of its own below: WW3D2
+  # links it the way it links d3d9.lib on Windows, and posixdevice needs none of it.
+  list(FILTER POSIXDEVICE_SOURCES EXCLUDE REGEX "/PosixDevice/Render/")
+  # PosixDevice/Install is where the player's Zero Hour is (P1 step 4): plain logic over the file system
+  # and Registry.ini, no engine state, so a library of its own that test_install_root links alone.
+  list(FILTER POSIXDEVICE_SOURCES EXCLUDE REGEX "/PosixDevice/Install/")
+  add_library(installroot STATIC ${CMAKE_CURRENT_SOURCE_DIR}/GameEngineDevice/Source/PosixDevice/Install/PosixInstallRoot.cpp)
+  target_include_directories(installroot PUBLIC ${CMAKE_CURRENT_SOURCE_DIR}/GameEngineDevice/Include
+    PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/GameEngine/Include)
+  set_target_properties(installroot PROPERTIES CXX_STANDARD 17)
+  target_link_libraries(installroot PUBLIC wwlib)
+  # The BIG archive reader is Win32Device's own, built here as it is (C1 (f)): it has no Win32 in it but
+  # ntohl and one message box, both behind #if, and one copy keeps the mount order - which archive wins
+  # which path, and so the INI CRC - the same on every platform.
+  list(APPEND POSIXDEVICE_SOURCES
+    ${CMAKE_CURRENT_SOURCE_DIR}/GameEngineDevice/Source/Win32Device/Common/Win32BIGFile.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/GameEngineDevice/Source/Win32Device/Common/Win32BIGFileSystem.cpp)
+  add_library(posixdevice STATIC ${ZH_NOT_YET_PORTABLE} ${POSIXDEVICE_SOURCES})
+  target_include_directories(posixdevice PUBLIC ${CMAKE_CURRENT_SOURCE_DIR}/GameEngineDevice/Include)
+  set_target_properties(posixdevice PROPERTIES CXX_STANDARD 17)
+  target_link_libraries(posixdevice PUBLIC gameengine)
+endif()
+
+# ===========================================================================
+# The renderer off Windows (decision 7): WW3D2 and W3DDevice against a Direct3D 9-shaped device
+# ===========================================================================
+# WW3D2 and W3DDevice compile unchanged in their D3D9 calls: <d3d9.h> is Platform/PosixD3D9's, which is
+# Platform/D3D9Posix.h, and the device behind it is posixd3d9.  Phase A1 builds and links them; the
+# device has no resources until A2 and no draw until A3.  All of it is in the default build, the link
+# probe included, so a change that breaks the renderer off Windows fails the Mac build.
+if(ZH_PLATFORM_POSIX)
+  set(ZH_POSIX_D3D9_INCLUDE ${CMAKE_CURRENT_SOURCE_DIR}/Libraries/Include/Platform/PosixD3D9)
+
+  # ---- d3dx9runtime: the same library name as Windows's, with d3dx9posix.cpp's bodies ---------------
+  # d3dx9posix_texture.cpp is phase A2's texture helpers, d3dx9posix.cpp the rest.
+  add_library(d3dx9runtime STATIC
+    ${WW}/WW3D2/d3dx9posix.cpp ${WW}/WW3D2/d3dx9posix_texture.cpp ${WW}/WW3D2/d3d8shadertranslate.cpp
+    ${WW}/WW3D2/d3dx9portable.cpp)
+  set_target_properties(d3dx9runtime PROPERTIES CXX_STANDARD 17)
+  target_include_directories(d3dx9runtime PUBLIC ${WW}/WW3D2 ${ZH_POSIX_D3D9_INCLUDE}
+    # The texture helpers are CPU work over the device's own images (PosixImageOps), so they see
+    # the device's headers - privately: nothing else outside the device does.
+    PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/GameEngineDevice/Source/PosixDevice/Render)
+  target_link_libraries(d3dx9runtime PRIVATE posixd3d9)
+
+  # The matrix functions and the FVF size against independent answers, and the binding's contract;
+  # the header says what it does not prove.
+  add_executable(d3dx9posix_selfcheck ${CMAKE_CURRENT_SOURCE_DIR}/Tests/test_d3dx9posix.cpp)
+  set_target_properties(d3dx9posix_selfcheck PROPERTIES CXX_STANDARD 17)
+  target_include_directories(d3dx9posix_selfcheck PRIVATE ${WW}/WWLib ${WW}/WWDebug ${WW}/WWMath)
+  target_link_libraries(d3dx9posix_selfcheck PRIVATE d3dx9runtime)
+  add_test(NAME d3dx9posix_selfcheck COMMAND d3dx9posix_selfcheck)
+  # A3e-asm (b): the port's D3DXAssembleShader carries each water text to the device exactly (decision:
+  # it is not an assembler).  Microsoft's tokens for the same texts: d3dx_assemble_oracle.
+  add_executable(d3dx_assemble_stub_selfcheck ${CMAKE_CURRENT_SOURCE_DIR}/Tests/test_d3dx_assemble_stub.cpp)
+  set_target_properties(d3dx_assemble_stub_selfcheck PROPERTIES CXX_STANDARD 17)
+  target_include_directories(d3dx_assemble_stub_selfcheck PRIVATE ${WW}/WWLib ${WW}/WWDebug ${WW}/WWMath)
+  target_compile_definitions(d3dx_assemble_stub_selfcheck PRIVATE ZH_CODE_DIR="${CMAKE_CURRENT_SOURCE_DIR}")
+  target_link_libraries(d3dx_assemble_stub_selfcheck PRIVATE d3dx9runtime)
+  add_test(NAME d3dx_assemble_stub_selfcheck COMMAND d3dx_assemble_stub_selfcheck)
+
+  # ---- posixd3d9: the device, in the place d3d9.lib has on Windows -----------------------------------
+  file(GLOB_RECURSE POSIXD3D9_SOURCES ${CMAKE_CURRENT_SOURCE_DIR}/GameEngineDevice/Source/PosixDevice/Render/*.cpp)
+  if(ZH_PLATFORM_ANDROID)
+    # Android uses the native GLES 3.0 backend. Keep the D3D9-shaped resource/device layer but replace
+    # the SDL_GPU frame/cache/mirror implementation with the GLES equivalents.
+    list(FILTER POSIXD3D9_SOURCES EXCLUDE REGEX "/SdlGpuFrame\\.cpp$")
+    list(FILTER POSIXD3D9_SOURCES EXCLUDE REGEX "/SdlGpuFrameBatch\\.cpp$")
+    list(FILTER POSIXD3D9_SOURCES EXCLUDE REGEX "/SdlPipelineCache\\.cpp$")
+    list(FILTER POSIXD3D9_SOURCES EXCLUDE REGEX "/SdlProgramCache\\.cpp$")
+    list(FILTER POSIXD3D9_SOURCES EXCLUDE REGEX "/SdlResourceMirror\\.cpp$")
+    list(APPEND POSIXD3D9_SOURCES
+      ${CMAKE_CURRENT_SOURCE_DIR}/GameEngineDevice/Source/PosixDevice/Render/GlesSdlGpuFrame.cpp
+      ${CMAKE_CURRENT_SOURCE_DIR}/GameEngineDevice/Source/PosixDevice/Render/GlesSdlPipelineCache.cpp
+      ${CMAKE_CURRENT_SOURCE_DIR}/GameEngineDevice/Source/PosixDevice/Render/GlesSdlProgramCache.cpp
+      ${CMAKE_CURRENT_SOURCE_DIR}/GameEngineDevice/Source/PosixDevice/Render/GlesSdlResourceMirror.cpp)
+  endif()
+  add_library(posixd3d9 STATIC ${POSIXD3D9_SOURCES})
+  set_target_properties(posixd3d9 PROPERTIES CXX_STANDARD 17)
+  target_include_directories(posixd3d9 PUBLIC ${ZH_POSIX_D3D9_INCLUDE})
+  # Desktop POSIX retains SDL_GPU; Android uses the GLES backend above.
+  target_link_libraries(posixd3d9 PRIVATE ${ZH_SDL3_TARGET} sdl3shadercompile engineshader ffshader ffvertex)
+  if(ZH_PLATFORM_ANDROID)
+    target_compile_definitions(posixd3d9 PRIVATE ZH_ANDROID_GLES=1)
+    target_link_libraries(posixd3d9 PRIVATE GLESv3 GLESv2 log android)
+  endif()
+
+  # A3a's frame: a clear read back, and the gamma pass through a picture that shows any flip.  Needs a GPU
+  # but no window; exits 77 (skipped, and ctest says so) where SDL has no GPU device to give.
+  add_executable(sdl_gpu_frame_selfcheck ${CMAKE_CURRENT_SOURCE_DIR}/Tests/test_sdl_gpu_frame.cpp)
+  set_target_properties(sdl_gpu_frame_selfcheck PROPERTIES CXX_STANDARD 17)
+  target_include_directories(sdl_gpu_frame_selfcheck PRIVATE
+    ${CMAKE_CURRENT_SOURCE_DIR}/GameEngineDevice/Source/PosixDevice/Render)
+  target_link_libraries(sdl_gpu_frame_selfcheck PRIVATE posixd3d9 ${ZH_SDL3_TARGET})
+  add_test(NAME sdl_gpu_frame_selfcheck COMMAND sdl_gpu_frame_selfcheck)
+
+  # A3c's resolve: the device's state into the generators' descriptions and the constants their
+  # programs read, on a headless device.  No GPU.
+  add_executable(posix_draw_resolve_selfcheck ${CMAKE_CURRENT_SOURCE_DIR}/Tests/test_posix_draw_resolve.cpp)
+  set_target_properties(posix_draw_resolve_selfcheck PROPERTIES CXX_STANDARD 17)
+  target_include_directories(posix_draw_resolve_selfcheck PRIVATE
+    ${CMAKE_CURRENT_SOURCE_DIR}/GameEngineDevice/Source/PosixDevice/Render)
+  target_link_libraries(posix_draw_resolve_selfcheck PRIVATE posixd3d9 ffshader ffvertex)
+  add_test(NAME posix_draw_resolve_selfcheck COMMAND posix_draw_resolve_selfcheck)
+
+  # A3c's program cache: generated programs compiled for this machine's GPU, every combiner operation
+  # the generator implements and every light type.  Exits 77 (skipped) with no GPU.
+  add_executable(sdl_program_cache_selfcheck ${CMAKE_CURRENT_SOURCE_DIR}/Tests/test_sdl_program_cache.cpp)
+  set_target_properties(sdl_program_cache_selfcheck PROPERTIES CXX_STANDARD 17)
+  target_include_directories(sdl_program_cache_selfcheck PRIVATE
+    ${CMAKE_CURRENT_SOURCE_DIR}/GameEngineDevice/Source/PosixDevice/Render)
+  target_link_libraries(sdl_program_cache_selfcheck PRIVATE posixd3d9 ffshader ffvertex ${ZH_SDL3_TARGET})
+  add_test(NAME sdl_program_cache_selfcheck COMMAND sdl_program_cache_selfcheck)
+  set_tests_properties(sdl_program_cache_selfcheck PROPERTIES SKIP_RETURN_CODE 77)
+
+  # A3c's pipelines and samplers: the D3D9 state translations, with every engine vertex format's stride
+  # against D3DX's own size; then pipelines and samplers on this machine's GPU (77 without one).
+  add_executable(sdl_pipeline_state_selfcheck ${CMAKE_CURRENT_SOURCE_DIR}/Tests/test_sdl_pipeline_state.cpp)
+  set_target_properties(sdl_pipeline_state_selfcheck PROPERTIES CXX_STANDARD 17)
+  target_include_directories(sdl_pipeline_state_selfcheck PRIVATE
+    ${CMAKE_CURRENT_SOURCE_DIR}/GameEngineDevice/Source/PosixDevice/Render ${WW}/WWLib ${WW}/WWDebug ${WW}/WWMath)
+  target_link_libraries(sdl_pipeline_state_selfcheck PRIVATE posixd3d9 d3dx9runtime ffshader ffvertex ${ZH_SDL3_TARGET})
+  add_test(NAME sdl_pipeline_state_selfcheck COMMAND sdl_pipeline_state_selfcheck)
+  set_tests_properties(sdl_pipeline_state_selfcheck PROPERTIES SKIP_RETURN_CODE 77)
+
+  # A3c's draws: through the device's D3D9 calls onto this machine's GPU, read back from the back buffer
+  # (77 without a GPU).
+  add_executable(posix_gpu_draw_selfcheck ${CMAKE_CURRENT_SOURCE_DIR}/Tests/test_posix_gpu_draw.cpp)
+  set_target_properties(posix_gpu_draw_selfcheck PROPERTIES CXX_STANDARD 17)
+  target_include_directories(posix_gpu_draw_selfcheck PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/GameEngineDevice/Source/PosixDevice/Render)
+  target_link_libraries(posix_gpu_draw_selfcheck PRIVATE posixd3d9 ${ZH_SDL3_TARGET})
+  add_test(NAME posix_gpu_draw_selfcheck COMMAND posix_gpu_draw_selfcheck)
+  set_tests_properties(posix_gpu_draw_selfcheck PROPERTIES SKIP_RETURN_CODE 77)
+
+  # A3b's harness: the device's draws on this machine's GPU against FFReference, scenario by scenario,
+  # with two armed controls that must fail (77 without a GPU).
+  add_executable(ffref_gpu_selfcheck ${CMAKE_CURRENT_SOURCE_DIR}/Tests/test_ffref_gpu.cpp)
+  set_target_properties(ffref_gpu_selfcheck PROPERTIES CXX_STANDARD 17)
+  target_include_directories(ffref_gpu_selfcheck PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/GameEngineDevice/Source/PosixDevice/Render)
+  target_link_libraries(ffref_gpu_selfcheck PRIVATE posixd3d9 ffreference ${ZH_SDL3_TARGET})
+  add_test(NAME ffref_gpu_selfcheck COMMAND ffref_gpu_selfcheck)
+  set_tests_properties(ffref_gpu_selfcheck PROPERTIES SKIP_RETURN_CODE 77)
+
+  # The game's own draws against FFReference: ZH_GPU_CAPTURE's captures, replayed one by one (77 without
+  # ZH_FFREF_CAPTURE_DIR; the captures come from the user's install and stay out of the repository).
+  add_executable(ffref_capture_selfcheck ${CMAKE_CURRENT_SOURCE_DIR}/Tests/test_ffref_capture.cpp)
+  set_target_properties(ffref_capture_selfcheck PROPERTIES CXX_STANDARD 17)
+  target_include_directories(ffref_capture_selfcheck PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/GameEngineDevice/Source/PosixDevice/Render)
+  target_link_libraries(ffref_capture_selfcheck PRIVATE posixd3d9 ffreference ${ZH_SDL3_TARGET})
+  add_test(NAME ffref_capture_selfcheck COMMAND ffref_capture_selfcheck)
+  set_tests_properties(ffref_capture_selfcheck PROPERTIES SKIP_RETURN_CODE 77)
+  set_tests_properties(sdl_gpu_frame_selfcheck PROPERTIES SKIP_RETURN_CODE 77)
+
+  # A2's half of the device: the resources, the pixel codec, the image operations, the device's
+  # resource methods and Clear, the caps, and D3DX's texture helpers, against D3D9's and D3DX's rules.  See Tests/test_posix_resources.cpp.
+  add_executable(test_posix_resources ${CMAKE_CURRENT_SOURCE_DIR}/Tests/test_posix_resources.cpp)
+  target_include_directories(test_posix_resources PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/GameEngineDevice/Source/PosixDevice/Render)
+  set_target_properties(test_posix_resources PROPERTIES CXX_STANDARD 17)
+  target_link_libraries(test_posix_resources PRIVATE posixd3d9 d3dx9runtime ffshader test_harness)
+  add_test(NAME test_posix_resources COMMAND test_posix_resources)
+
+  # ---- ww3d2 -----------------------------------------------------------------------------------------
+  add_library(ww3d2 STATIC ${ZH_WW3D2_SOURCES} ${WW}/WW3D2/dx11runtime_posix.cpp)
+  set_target_properties(ww3d2 PROPERTIES CXX_STANDARD 17)
+  # FontCharsClass draws its glyphs with FreeType through it (D6b)
+  target_link_libraries(ww3d2 PRIVATE glyphrasteriser)
+  target_include_directories(ww3d2
+    PUBLIC ${WW}/WW3D2 ${ZH_POSIX_D3D9_INCLUDE}
+    PRIVATE ${WW}/WWLib ${WW}/WWMath ${WW}/WWDebug ${WW}/WWSaveLoad ${WW}/Wwutil
+            ${WW}/wwshade ${WW}/WWAudio ${WW}/Miles6/include)
+  target_link_libraries(ww3d2 PUBLIC posixd3d9 d3dx9runtime ffshader
+    PRIVATE wwlib wwmath wwdebug wwsaveload)
+
+  # ---- w3ddevice: GameEngineDevice's W3DDevice, gameenginedevice's renderer half ---------------------
+  file(GLOB_RECURSE W3DDEVICE_SOURCES ${CMAKE_CURRENT_SOURCE_DIR}/GameEngineDevice/Source/W3DDevice/*.cpp)
+  # W3DMouse sits on SDL3's mouse off Windows (C3b), and W3DGameClient makes it and SDL3's keyboard, so
+  # w3ddevice takes sdlinput: the input half of the SDL layer, apart from sdldevice so that sdldevice can
+  # take w3ddevice for the engine's W3D factories without the two needing each other.
+  # W3DWebBrowser is the embedded browser as a COM object, which only Win32GameEngine makes; GameEngine
+  # has its own WebBrowser off Windows (B5).
+  list(FILTER W3DDEVICE_SOURCES EXCLUDE REGEX "/W3DDevice/GameClient/W3DWebBrowser\\.cpp$")
+
+  # ---- the movies (V1): Windows' Bink player and its Bink API on FFmpeg, the same two files -------------
+  # FFmpeg is built from the tarball Tools/vendor.sh keeps, into the build tree, with the Bink demuxer
+  # and decoders only; the script deletes its 110MB of unpacked source afterwards (it says why).  It
+  # reruns when the tarball or the script changes, and takes ~30s.
+  set(FFMPEG_TARBALL ${LIBSRC}/FFmpeg/ffmpeg-8.1.2.tar.xz)
+  if(NOT EXISTS ${FFMPEG_TARBALL})
+    message(FATAL_ERROR "The FFmpeg source tarball is missing from Libraries/Source/FFmpeg - run Tools/vendor.sh.")
+  endif()
+  set(FFMPEG_POSIX ${CMAKE_CURRENT_BINARY_DIR}/ffmpeg)
+  # Link order: each before what it uses
+  set(FFMPEG_POSIX_LIBS ${FFMPEG_POSIX}/lib/libavformat.a ${FFMPEG_POSIX}/lib/libavcodec.a
+    ${FFMPEG_POSIX}/lib/libswscale.a ${FFMPEG_POSIX}/lib/libswresample.a ${FFMPEG_POSIX}/lib/libavutil.a)
+  set(FFMPEG_POSIX_CFLAGS "")
+  if(APPLE AND CMAKE_OSX_DEPLOYMENT_TARGET)
+    set(FFMPEG_POSIX_CFLAGS "-mmacosx-version-min=${CMAKE_OSX_DEPLOYMENT_TARGET}")
+  endif()
+  # The SDK CMake gives our own targets.  Only /usr/bin/cc, the xcrun shim, finds one by itself; CMake may
+  # choose the toolchain's own cc (/Library/Developer/CommandLineTools/usr/bin/cc, as on one build Mac here),
+  # and FFmpeg's configure then cannot link its test program ("library 'System' not found") nor compile its
+  # host tools ("ctype.h not found").  SDKROOT reaches every compiler call configure makes - target and
+  # host alike - where an -isysroot flag would reach only the target's (and -arch must not reach the host).
+  set(FFMPEG_POSIX_ENV "")
+  if(APPLE AND CMAKE_OSX_SYSROOT)
+    set(FFMPEG_POSIX_ENV "SDKROOT=${CMAKE_OSX_SYSROOT}")
+  endif()
+  # FFmpeg's own configure picks the host's architecture, so a build for another one (x86_64 on Apple
+  # Silicon, run under Rosetta: E1's architecture axis) names it.  One at a time: configure builds one.
+  set(FFMPEG_POSIX_ARCH "")
+  if(APPLE AND CMAKE_OSX_ARCHITECTURES)
+    list(LENGTH CMAKE_OSX_ARCHITECTURES FFMPEG_ARCH_COUNT)
+    if(NOT FFMPEG_ARCH_COUNT EQUAL 1)
+      message(FATAL_ERROR "FFmpeg builds one architecture at a time; CMAKE_OSX_ARCHITECTURES is '${CMAKE_OSX_ARCHITECTURES}'.")
+    endif()
+    string(STRIP "${FFMPEG_POSIX_CFLAGS} -arch ${CMAKE_OSX_ARCHITECTURES}" FFMPEG_POSIX_CFLAGS)
+    if(CMAKE_OSX_ARCHITECTURES STREQUAL "arm64")
+      set(FFMPEG_POSIX_ARCH aarch64)
+    else()
+      set(FFMPEG_POSIX_ARCH ${CMAKE_OSX_ARCHITECTURES})
+    endif()
+  endif()
+  add_custom_command(
+    OUTPUT ${FFMPEG_POSIX_LIBS} ${FFMPEG_POSIX}/include/libavcodec/avcodec.h
+    COMMAND ${CMAKE_COMMAND} -E env ${FFMPEG_POSIX_ENV}
+            ${CMAKE_CURRENT_SOURCE_DIR}/Tools/ffmpeg-build-posix.sh ${FFMPEG_TARBALL}
+            ${CMAKE_CURRENT_BINARY_DIR}/ffmpeg-work ${FFMPEG_POSIX} ${CMAKE_C_COMPILER} "${FFMPEG_POSIX_CFLAGS}"
+            "${FFMPEG_POSIX_ARCH}"
+    DEPENDS ${FFMPEG_TARBALL} ${CMAKE_CURRENT_SOURCE_DIR}/Tools/ffmpeg-build-posix.sh
+    COMMENT "Building FFmpeg 8.1.2's Bink decoders for the movies (V1)"
+    VERBATIM)
+  add_custom_target(ffmpeg_posix DEPENDS ${FFMPEG_POSIX_LIBS} ${FFMPEG_POSIX}/include/libavcodec/avcodec.h)
+
+  # bink_ffmpeg.cpp: the XAudio2 half is Windows'; off Windows the sound is a voice in C4's mix
+  # (miles_miniaudio's mss_ex_pcm.h), so this links milesaudio where Windows links xaudio2.
+  add_library(binkvideo STATIC ${WW}/Bink/ffmpeg/bink_ffmpeg.cpp)
+  add_dependencies(binkvideo ffmpeg_posix)
+  target_include_directories(binkvideo PUBLIC ${WW}/Bink/include
+    PRIVATE ${FFMPEG_POSIX}/include ${WW}/Miles6/include ${WW}/WWLib)
+  target_link_libraries(binkvideo PRIVATE ${FFMPEG_POSIX_LIBS} milesaudio wwlib m Threads::Threads)
+
+  # BinkVideoPlayer.cpp, unchanged: W3DGameClient makes it on every platform, so it lives with w3ddevice
+  list(APPEND W3DDEVICE_SOURCES ${CMAKE_CURRENT_SOURCE_DIR}/GameEngineDevice/Source/VideoDevice/Bink/BinkVideoPlayer.cpp)
+  add_library(w3ddevice STATIC ${W3DDEVICE_SOURCES})
+  set_target_properties(w3ddevice PROPERTIES CXX_STANDARD 17)
+  target_include_directories(w3ddevice PUBLIC ${CMAKE_CURRENT_SOURCE_DIR}/GameEngineDevice/Include
+    PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/Stubs ${CMAKE_CURRENT_SOURCE_DIR}/Main
+            ${WW}/Miles6/include ${WW}/Bink/include)
+  target_link_libraries(w3ddevice PUBLIC gameengine ww3d2 sdlinput binkvideo)
+
+  # A1's link checkpoint: all of w3ddevice and ww3d2, whole archive, against what the POSIX game links.
+  add_executable(w3d_link_probe ${CMAKE_CURRENT_SOURCE_DIR}/Tests/w3d_link_probe.cpp)
+  set_target_properties(w3d_link_probe PROPERTIES CXX_STANDARD 17)
+  target_link_libraries(w3d_link_probe PRIVATE
+    "$<LINK_LIBRARY:WHOLE_ARCHIVE,w3ddevice,ww3d2>" posixdevice gameengine)
+
+  # A2's checkpoint: every texture of the install through WW3D2's loader into the POSIX device on a
+  # null-window (-headless) WW3D, read back and checked against the file.  Needs ZH_GAME_DATA, else Skipped.
+  # The .wak loader's rules: a wave type from the wave table, and no more tracks than the file holds.
+  add_executable(test_water_tracks ${CMAKE_CURRENT_SOURCE_DIR}/Tests/test_water_tracks.cpp)
+  set_target_properties(test_water_tracks PROPERTIES CXX_STANDARD 17)
+  target_include_directories(test_water_tracks PRIVATE ${WW}/WWLib ${WW}/WWMath ${WW}/WWDebug)
+  target_link_libraries(test_water_tracks PRIVATE w3ddevice ww3d2 posixdevice gameengine test_harness)
+  add_test(NAME test_water_tracks COMMAND test_water_tracks)
+
+  # W3DRoadBuffer's column count: at least two, never longer than the map.  See Tests/test_road_buffer.cpp.
+  add_executable(test_road_buffer ${CMAKE_CURRENT_SOURCE_DIR}/Tests/test_road_buffer.cpp)
+  set_target_properties(test_road_buffer PROPERTIES CXX_STANDARD 17)
+  target_include_directories(test_road_buffer PRIVATE ${WW}/WWLib ${WW}/WWMath ${WW}/WWDebug)
+  target_link_libraries(test_road_buffer PRIVATE w3ddevice ww3d2 posixdevice gameengine test_harness)
+  add_test(NAME test_road_buffer COMMAND test_road_buffer)
+
+  add_executable(test_install_textures ${CMAKE_CURRENT_SOURCE_DIR}/Tests/test_install_textures.cpp)
+  set_target_properties(test_install_textures PROPERTIES CXX_STANDARD 17)
+  target_include_directories(test_install_textures PRIVATE ${WW}/WWLib ${WW}/WWMath ${WW}/WWDebug)
+  target_link_libraries(test_install_textures PRIVATE w3ddevice ww3d2 posixdevice gameengine test_harness)
+  add_test(NAME test_install_textures COMMAND test_install_textures)
+  set_tests_properties(test_install_textures PROPERTIES SKIP_RETURN_CODE 77)
+  if(ZH_GAME_DATA)
+    set_tests_properties(test_install_textures PROPERTIES ENVIRONMENT "ZH_DATA_DIR=${ZH_GAME_DATA}")
+  endif()
+
+  # The renderer's hooks gameengine calls, W3DDevice's own off Windows as on it, and decision 2 (B19 (c))
+  # in W3DShaderManager's testMinimumRequirements, checked against the shipped GameLODPresets.ini when
+  # ZH_GAME_DATA is set.  See Tests/test_render_hooks.cpp.
+  add_executable(test_render_hooks ${CMAKE_CURRENT_SOURCE_DIR}/Tests/test_render_hooks.cpp)
+  set_target_properties(test_render_hooks PROPERTIES CXX_STANDARD 17)
+  target_link_libraries(test_render_hooks PRIVATE w3ddevice ww3d2 posixdevice gameengine)
+  add_test(NAME test_render_hooks COMMAND test_render_hooks)
+  if(ZH_GAME_DATA)
+    set_tests_properties(test_render_hooks PROPERTIES ENVIRONMENT "ZH_DATA_DIR=${ZH_GAME_DATA}")
+  endif()
+endif()
+
+# ===========================================================================
+# Phase 4 - GameEngineDevice + Main -> generals.exe
+# ===========================================================================
+# All of Phase 4 is Windows: Win32Device is the platform layer, the audio and video backends are
+# XAudio2 and a Windows FFmpeg build linked from .lib files, and generals.exe itself is a WIN32
+# subsystem binary started from WinMain.  C1 through C4 build the macOS equivalents, one at a
+# time, and this guard is what they open up.  The block is left unindented so that the diff which
+# added the guard is the guard.
+# ---- The version headers, for generals on every platform ---------------------
+# BuildVersion.h and GeneratedVersion.h are normally written by Tools/
+# buildVersionUpdate and Tools/versionUpdate as a pre-build step, from a build
+# counter in the source tree.  Both are three-line headers, so write them at
+# configure time instead - it keeps two more VC6 tools out of the port, and
+# Windows wants UAC elevation for exe names containing "version" anyway.
+set(GENERATED ${CMAKE_CURRENT_BINARY_DIR}/generated)
+file(WRITE ${GENERATED}/BuildVersion.h
+"// Generated by CMake, standing in for Tools/buildVersionUpdate.\n"
+"#define VERSION_STRING \"v2.4.0\"\n"
+"#define VERSION_MAJOR 2\n"
+"#define VERSION_MINOR 4\n"
+"#define VERSION_BUILDNUM 0\n")
+file(WRITE ${GENERATED}/GeneratedVersion.h
+"// Generated by CMake, standing in for Tools/versionUpdate.\n"
+"#define LOCAL_BUILD_STRING \"0\"\n"
+"#define VERSION_LOCALBUILDNUM 0\n"
+"#define VERSION_BUILDUSER \"cmake\"\n"
+"#define VERSION_BUILDLOC \"${CMAKE_HOST_SYSTEM_NAME}\"\n")
+
+if(ZH_PLATFORM_WINDOWS)
+set(GED ${CMAKE_CURRENT_SOURCE_DIR}/GameEngineDevice)
+set(STUBS ${CMAKE_CURRENT_SOURCE_DIR}/Stubs)
+
+file(GLOB_RECURSE GAMEENGINEDEVICE_SOURCES ${GED}/Source/*.cpp)
+# On disk but absent from GameEngineDevice.dsp: the DirectInput mouse (the
+# shipping build uses the Win32 message mouse instead).
+list(REMOVE_ITEM GAMEENGINEDEVICE_SOURCES
+  ${GED}/Source/Win32Device/GameClient/Win32DIMouse.cpp)
+# PosixDevice is the POSIX platform layer (C1), built below as posixdevice, never on Windows.
+list(FILTER GAMEENGINEDEVICE_SOURCES EXCLUDE REGEX "/Source/PosixDevice/")
+# SdlDevice is the same for SDL3 (C2, C3), built below as sdldevice, never on Windows either; the glob
+# above took it in, and W2's first MSVC build found no SDL3 to compile it against.
+list(FILTER GAMEENGINEDEVICE_SOURCES EXCLUDE REGEX "/Source/SdlDevice/")
+# Sound and video are the game's own.  Miles and Bink were binary-only, and the DLLs the retail
+# game ships are 32-bit, so there is nothing for a 64-bit exe to bind to: what it links instead is
+# those two APIs written over XAudio2 and FFmpeg.  FFmpeg decodes binkvideo and binkaudio natively,
+# so the .bik files on disk play as they are, and swscale converts each frame into whatever surface
+# format the video player asks for.  MilesAudioManager.cpp and BinkVideoPlayer.cpp are unchanged and
+# still call AIL_* and Bink*; the reconstructed headers in Miles6/include and Bink/include are still
+# the declarations.  miles_smoke and bink_smoke are the checks.
+# Windows on ARM64 links its own build, dist-arm64: Tools/ffmpeg-build.bat arm64 makes it.
+if(CMAKE_CXX_COMPILER_ARCHITECTURE_ID STREQUAL "ARM64")
+  set(FFMPEG_DIR ${LIBSRC}/FFmpeg/dist-arm64)
+else()
+  set(FFMPEG_DIR ${LIBSRC}/FFmpeg/dist)
+endif()
+if(NOT EXISTS ${FFMPEG_DIR}/include)
+  message(FATAL_ERROR
+    "FFmpeg is missing from ${FFMPEG_DIR} - see the vendored-libs rule (ARM64: Tools/ffmpeg-build.bat arm64).")
+endif()
+
+set(FFMPEG_CORE
+  ${FFMPEG_DIR}/lib/avformat.lib ${FFMPEG_DIR}/lib/avcodec.lib ${FFMPEG_DIR}/lib/avutil.lib
+  ${FFMPEG_DIR}/lib/swresample.lib)
+
+add_library(binkvideo STATIC ${WW}/Bink/ffmpeg/bink_ffmpeg.cpp)
+target_include_directories(binkvideo PRIVATE ${WW}/Bink/include ${FFMPEG_DIR}/include)
+target_link_libraries(binkvideo PRIVATE ${FFMPEG_CORE} ${FFMPEG_DIR}/lib/swscale.lib xaudio2)
+
+add_library(milesaudio STATIC ${WW}/Miles6/xaudio2/miles_xaudio2.cpp)
+target_include_directories(milesaudio PRIVATE ${WW}/Miles6/include ${FFMPEG_DIR}/include)
+target_link_libraries(milesaudio PRIVATE ${FFMPEG_CORE} xaudio2)
+
+add_library(gameenginedevice STATIC ${GAMEENGINEDEVICE_SOURCES})
+
+target_include_directories(gameenginedevice PUBLIC
+  ${GED}/Include ${STUBS} ${CMAKE_CURRENT_SOURCE_DIR}/Main
+  ${WW}/Miles6/include ${WW}/Bink/include)
+set_target_properties(gameenginedevice PROPERTIES CXX_STANDARD 17)
+target_link_libraries(gameenginedevice PUBLIC gameengine ww3d2 milesaudio binkvideo)
+
+# ---- generals.exe ---------------------------------------------------------
+add_executable(generals WIN32 ${CMAKE_CURRENT_SOURCE_DIR}/Main/WinMain.cpp
+                             ${CMAKE_CURRENT_SOURCE_DIR}/Main/RTS.RC)
+target_include_directories(generals PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/Main ${GENERATED})
+# A .map turns the "fault offset" in the Windows Application Error event into a
+# function name without a debugger: find the last entry whose RVA is <= the offset.
+target_link_options(generals PRIVATE /MAP)
+# /LARGEADDRESSAWARE used to be here, asking 64-bit Windows for the whole 4GB a 32-bit process can
+# address.  An eight-player Merciless match on Twilight Flame was already at 978MB of it.  The
+# ceiling it was working against does not exist in this build.
+set_target_properties(generals PROPERTIES CXX_STANDARD 17)
+target_link_libraries(generals PRIVATE gameenginedevice
+  winmm dsound wsock32 ole32 oleaut32 uuid)
+# The game reads its data relative to the working directory, so it has to sit
+# beside Run/'s .big files to find anything (Phase 5).
+add_custom_command(TARGET generals POST_BUILD
+  COMMAND ${CMAKE_COMMAND} -E copy_if_different
+          $<TARGET_FILE:generals> ${CMAKE_CURRENT_SOURCE_DIR}/../Run/
+  # The PDB has to sit next to the exe: SymInitialize searches the exe's directory,
+  # and without it the crash log's stack is addresses with no names.
+  COMMAND ${CMAKE_COMMAND} -E copy_if_different
+          $<TARGET_PDB_FILE:generals> ${CMAKE_CURRENT_SOURCE_DIR}/../Run/
+  # The fork's INI files: the key bindings and their labels, and the detonation
+  # light loaded after EA's FXList.ini.  Run/ is gitignored, so these used to be
+  # hand-made files that silently went stale - the tracked copies under Code/Data
+  # are the masters and this puts them where the game reads them.  A loose file
+  # beats every .big and the game never writes one back, so overwriting them on
+  # each build is safe.  The whole directory, so a new master is copied without a
+  # line here: anything in it lands in the multiplayer INI CRC, and package.bat
+  # ships the same directory and refuses a Run/ that disagrees with it.
+  COMMAND ${CMAKE_COMMAND} -E copy_directory
+          ${CMAKE_CURRENT_SOURCE_DIR}/Data/INI
+          ${CMAKE_CURRENT_SOURCE_DIR}/../Run/Data/INI
+  COMMAND ${CMAKE_COMMAND} -E copy_if_different
+          ${CMAKE_CURRENT_SOURCE_DIR}/Data/Patch.str
+          ${CMAKE_CURRENT_SOURCE_DIR}/../Run/Data/
+  # The skirmish AI's scripts with the USA Hard opening rewritten by Tools/ScbTool/opening.py.  The
+  # file is in the multiplayer checksum (GlobalData.cpp), so it ships with the exe like the INIs.
+  COMMAND ${CMAKE_COMMAND} -E copy_directory
+          ${CMAKE_CURRENT_SOURCE_DIR}/Data/Scripts
+          ${CMAKE_CURRENT_SOURCE_DIR}/../Run/Data/Scripts
+  # The translations the Language option lays over the English strings, one directory per
+  # language.  Strings are not in the multiplayer INI checksum: two players can read one match in
+  # two languages.
+  COMMAND ${CMAKE_COMMAND} -E copy_directory
+          ${CMAKE_CURRENT_SOURCE_DIR}/Data/Turkish
+          ${CMAKE_CURRENT_SOURCE_DIR}/../Run/Data/Turkish
+  COMMAND ${CMAKE_COMMAND} -E copy_directory
+          ${CMAKE_CURRENT_SOURCE_DIR}/Data/German
+          ${CMAKE_CURRENT_SOURCE_DIR}/../Run/Data/German
+  # The startup splash.  WinMain loads it from a loose file next to the exe, so
+  # the fork's own artwork is a tracked master here rather than a hand-made file
+  # in gitignored Run/.
+  COMMAND ${CMAKE_COMMAND} -E copy_if_different
+          ${CMAKE_CURRENT_SOURCE_DIR}/Data/Install_Final.bmp
+          ${CMAKE_CURRENT_SOURCE_DIR}/../Run/
+  # The three command bar plates per side, the smoke signals' ground marks and the
+  # SupW uplink's pink laser strip (Tools/pink_laser.py) and the attack, hold and move cameos
+  # (Tools/order_cameos.py).  A loose
+  # texture beats every .big, so these land in Run/Art/Textures where the W3D file
+  # system looks first.
+  COMMAND ${CMAKE_COMMAND} -E copy_directory
+          ${CMAKE_CURRENT_SOURCE_DIR}/Data/Art/Textures
+          ${CMAKE_CURRENT_SOURCE_DIR}/../Run/Art/Textures
+  # The fork's window layouts, generated from the shipped ones by Tools/*.py and
+  # tracked here.  They live outside Data/ in the archive (Window/Menus/...), and
+  # a loose file wins over WindowZH.big.  Layouts are not in the multiplayer INI
+  # checksum, so an out of date copy costs a wrong looking screen, not a refused
+  # join.
+  COMMAND ${CMAKE_COMMAND} -E copy_directory
+          ${CMAKE_CURRENT_SOURCE_DIR}/Data/Window
+          ${CMAKE_CURRENT_SOURCE_DIR}/../Run/Window
+  # -scenario reads these. They are a measuring tool rather than game data: outside Data/ so they
+  # cannot collide with an archive path, and outside the multiplayer INI checksum because nothing
+  # loads them with &xferCRC. They are not in package.bat for the same reason - a player has no use
+  # for one, and a scenario run cannot be replayed anyway.
+  COMMAND ${CMAKE_COMMAND} -E copy_directory
+          ${CMAKE_CURRENT_SOURCE_DIR}/Data/Scenarios
+          ${CMAKE_CURRENT_SOURCE_DIR}/../Run/Scenarios
+  # -cinema reads these shot lists. Client-side only, never checksummed, and a tool for making
+  # footage rather than anything a player needs, so they stay out of package.bat too.
+  COMMAND ${CMAKE_COMMAND} -E copy_directory
+          ${CMAKE_CURRENT_SOURCE_DIR}/Data/Cinema
+          ${CMAKE_CURRENT_SOURCE_DIR}/../Run/Cinema)
+
+# The audio and video backends decode with FFmpeg, so its DLLs have to sit next to the exe.  These
+# are the five the two backends link against; avdevice and avfilter are not used.
+set(FFMPEG_RUNTIME
+  ${FFMPEG_DIR}/bin/avcodec-62.dll ${FFMPEG_DIR}/bin/avformat-62.dll ${FFMPEG_DIR}/bin/avutil-60.dll
+  ${FFMPEG_DIR}/bin/swresample-6.dll ${FFMPEG_DIR}/bin/swscale-9.dll)
+add_custom_command(TARGET generals POST_BUILD
+  COMMAND ${CMAKE_COMMAND} -E copy_if_different
+          ${FFMPEG_RUNTIME} ${CMAKE_CURRENT_SOURCE_DIR}/../Run/)
+# The Direct3D 11 programs that ship with the game, compiled by Microsoft's d3dcompiler_47 when they were
+# recorded (Tools/record-dx11-shaders.ps1): next to the exe, where the backend reads them before compiling
+# anything.  Without them a first start compiles every program, and under Wine that took minutes (X2).
+if(EXISTS ${CMAKE_CURRENT_SOURCE_DIR}/Data/dx11shaders.shipped)
+  add_custom_command(TARGET generals POST_BUILD
+    COMMAND ${CMAKE_COMMAND} -E copy_if_different
+            ${CMAKE_CURRENT_SOURCE_DIR}/Data/dx11shaders.shipped ${CMAKE_CURRENT_SOURCE_DIR}/../Run/)
+endif()
+endif()  # ZH_PLATFORM_WINDOWS - GameEngineDevice, the backends and generals.exe
+
+# ===========================================================================
+# The game off Windows (C2): SdlDevice and the POSIX entry point
+# ===========================================================================
+# SdlGameEngine is PosixGameEngine (C1) with SDL3's window and events under it; Main/PosixMain.cpp is
+# WinMain's start-up sequence without the Windows.  Its factories are Win32GameEngine's W3D classes
+# (decision 8), so sdldevice takes w3ddevice as gameenginedevice holds W3DDevice on Windows.
+if(ZH_PLATFORM_POSIX)
+  # Windows' audio manager, unchanged but for its guarded non-AIL remainder, over the Miles surface on
+  # miniaudio (C4's upper half): gameenginedevice's audio half, as A1's w3ddevice is its renderer half.
+  # w3ddevice's glob is W3DDevice/ only, so this file is compiled here and nowhere else off Windows.
+  add_library(milesaudiomanager STATIC
+    ${CMAKE_CURRENT_SOURCE_DIR}/GameEngineDevice/Source/MilesAudioDevice/MilesAudioManager.cpp)
+  target_include_directories(milesaudiomanager PUBLIC ${CMAKE_CURRENT_SOURCE_DIR}/GameEngineDevice/Include
+    ${WW}/Miles6/include)
+  set_target_properties(milesaudiomanager PROPERTIES CXX_STANDARD 17)
+  target_link_libraries(milesaudiomanager PUBLIC gameengine milesaudio)
+
+  # SDL3's input (C3): the keyboard, the mouse, the text input's hooks, the .ANI cursors.  Its own
+  # library because w3ddevice's W3DGameClient and W3DMouse need it, and sdldevice needs w3ddevice.
+  file(GLOB SDLINPUT_SOURCES ${CMAKE_CURRENT_SOURCE_DIR}/GameEngineDevice/Source/SdlDevice/GameClient/*.cpp)
+  add_library(sdlinput STATIC ${SDLINPUT_SOURCES})
+  target_include_directories(sdlinput PUBLIC ${CMAKE_CURRENT_SOURCE_DIR}/GameEngineDevice/Include)
+  set_target_properties(sdlinput PROPERTIES CXX_STANDARD 17)
+  target_link_libraries(sdlinput PUBLIC gameengine ${ZH_SDL3_TARGET})
+
+  file(GLOB_RECURSE SDLDEVICE_SOURCES ${CMAKE_CURRENT_SOURCE_DIR}/GameEngineDevice/Source/SdlDevice/*.cpp)
+  list(FILTER SDLDEVICE_SOURCES EXCLUDE REGEX "/SdlDevice/GameClient/")
+  add_library(sdldevice STATIC ${SDLDEVICE_SOURCES})
+  target_include_directories(sdldevice PUBLIC ${CMAKE_CURRENT_SOURCE_DIR}/GameEngineDevice/Include
+    PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/Stubs)
+  set_target_properties(sdldevice PROPERTIES CXX_STANDARD 17)
+  target_link_libraries(sdldevice PUBLIC posixdevice w3ddevice ${ZH_SDL3_TARGET} milesaudiomanager sdlinput)
+  if(APPLE)
+    target_link_libraries(sdldevice PRIVATE "-framework CoreGraphics")		# SdlDisplays' panel size
+  endif()
+
+  add_executable(generals ${CMAKE_CURRENT_SOURCE_DIR}/Main/PosixMain.cpp)
+  target_include_directories(generals PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/Main ${GENERATED})
+  set_target_properties(generals PROPERTIES CXX_STANDARD 17)
+  target_link_libraries(generals PRIVATE sdldevice installroot)
+  # C2's SDL side of Monitors.h and MessageBoxWrapper, on SDL's offscreen video driver.
+  # test_gameengine_stubs.cpp: the names the executable supplies, which GCC's larger pull from sdldevice
+  # reaches (ld.lld, L1b); clang's does not, and they cost nothing there.
+  add_executable(test_sdl_platform ${CMAKE_CURRENT_SOURCE_DIR}/Tests/test_sdl_platform.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/Tests/test_gameengine_stubs.cpp)
+  target_include_directories(test_sdl_platform PRIVATE $<TARGET_PROPERTY:gameengine,INCLUDE_DIRECTORIES>)
+  target_compile_definitions(test_sdl_platform PRIVATE $<TARGET_PROPERTY:gameengine,COMPILE_DEFINITIONS>)
+  set_target_properties(test_sdl_platform PROPERTIES CXX_STANDARD 17)
+  target_link_libraries(test_sdl_platform PRIVATE sdldevice test_harness)
+  add_test(NAME test_sdl_platform COMMAND test_sdl_platform)
+
+  # C4's upper half: Windows' MilesAudioManager over the Miles surface on miniaudio's null backend, fed
+  # the install's own INIs and sounds through a read-only farm of its archives (rule 9), heard through
+  # the mix tap.  Needs ZH_GAME_DATA; Skipped (77) without it.
+  add_executable(test_milesaudiomanager ${CMAKE_CURRENT_SOURCE_DIR}/Tests/test_milesaudiomanager.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/Tests/test_gameengine_stubs.cpp)
+  target_include_directories(test_milesaudiomanager PRIVATE $<TARGET_PROPERTY:gameengine,INCLUDE_DIRECTORIES>)
+  target_compile_definitions(test_milesaudiomanager PRIVATE $<TARGET_PROPERTY:gameengine,COMPILE_DEFINITIONS>)
+  set_target_properties(test_milesaudiomanager PROPERTIES CXX_STANDARD 17)
+  target_link_libraries(test_milesaudiomanager PRIVATE sdldevice test_harness)
+  add_test(NAME test_milesaudiomanager COMMAND test_milesaudiomanager)
+  set_tests_properties(test_milesaudiomanager PROPERTIES SKIP_RETURN_CODE 77)
+  if(ZH_GAME_DATA)
+    set_tests_properties(test_milesaudiomanager PROPERTIES ENVIRONMENT "ZH_AUDIO_BACKEND=null;ZH_DATA_DIR=${ZH_GAME_DATA}")
+  else()
+    set_tests_properties(test_milesaudiomanager PROPERTIES ENVIRONMENT "ZH_AUDIO_BACKEND=null")
+  endif()
+
+  # C3a: input on SDL3's offscreen driver - the scancode table against DIKeyCodes.h, keys into the
+  # engine's key state, text into the IME manager, the mouse, and the install's .ANI cursors (read only,
+  # ZH_DATA_DIR; said when absent).
+  # test_gameengine_stubs.cpp: the names the executable supplies (gAppPrefix, the .csf/.str paths).
+  add_executable(test_sdl_input ${CMAKE_CURRENT_SOURCE_DIR}/Tests/test_sdl_input.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/Tests/test_gameengine_stubs.cpp)
+  target_include_directories(test_sdl_input PRIVATE $<TARGET_PROPERTY:gameengine,INCLUDE_DIRECTORIES>)
+  target_compile_definitions(test_sdl_input PRIVATE $<TARGET_PROPERTY:gameengine,COMPILE_DEFINITIONS>
+    DIKEYCODES_H="${CMAKE_CURRENT_SOURCE_DIR}/GameEngine/Include/GameClient/DIKeyCodes.h")
+  set_target_properties(test_sdl_input PROPERTIES CXX_STANDARD 17)
+  target_link_libraries(test_sdl_input PRIVATE sdldevice test_harness)
+  add_test(NAME test_sdl_input COMMAND test_sdl_input)
+  if(ZH_GAME_DATA)
+    set_tests_properties(test_sdl_input PROPERTIES ENVIRONMENT "ZH_DATA_DIR=${ZH_GAME_DATA}")
+  endif()
+
+  # The entry sequence without game data: see the script.
+  add_test(NAME generals_smoke
+           COMMAND ${CMAKE_CURRENT_SOURCE_DIR}/Tests/run_generals_smoke.sh $<TARGET_FILE:generals>)
+  # E1's POSIX harness on itself, with the game's data: a recording, its playback and a second run agree,
+  # and an edited replay is reported DIVERGED.  Same-machine determinism only: see the script.
+  add_test(NAME replay_check
+           COMMAND ${CMAKE_CURRENT_SOURCE_DIR}/Tests/run_replay_check.sh $<TARGET_FILE:generals>)
+  # Four 12000-frame matches since port defect 34.  The cap is there for a hang, not for speed: replay_check takes 279-392 s
+  # alone, and up to 991 s inside a full suite on a loaded 8-core Linux worker, where 1200 s had begun to cut it off.
+  set_tests_properties(replay_check PROPERTIES SKIP_RETURN_CODE 77 TIMEOUT 2400)
+  if(ZH_GAME_DATA)
+    set_tests_properties(replay_check PROPERTIES ENVIRONMENT "ZH_DATA_DIR=${ZH_GAME_DATA}")
+  endif()
+  # Port defect 33: no override leaves a unit without the locomotors EA gave it (a ReplaceModule of its AI
+  # module discards them unless the block re-states them).  One short run of the game on its data.
+  add_test(NAME locomotor_check
+           COMMAND ${CMAKE_CURRENT_SOURCE_DIR}/Tests/run_locomotor_check.sh $<TARGET_FILE:generals>)
+  set_tests_properties(locomotor_check PROPERTIES SKIP_RETURN_CODE 77 TIMEOUT 300)
+  if(ZH_GAME_DATA)
+    set_tests_properties(locomotor_check PROPERTIES ENVIRONMENT "ZH_DATA_DIR=${ZH_GAME_DATA}")
+  endif()
+  # The game's data going away under it (a drive disconnected or asleep): the game must say so and stop
+  # with exit status 3, never crash; the control, a rename, plays on.  macOS only for now (hdiutil); skipped
+  # elsewhere and without game data.  See the script.
+  add_test(NAME data_gone_check
+           COMMAND ${CMAKE_CURRENT_SOURCE_DIR}/Tests/run_data_gone_check.sh $<TARGET_FILE:generals>)
+  set_tests_properties(data_gone_check PROPERTIES SKIP_RETURN_CODE 77 TIMEOUT 900)
+  if(ZH_GAME_DATA)
+    set_tests_properties(data_gone_check PROPERTIES ENVIRONMENT "ZH_DATA_DIR=${ZH_GAME_DATA}")
+  endif()
+  # L1's POSIX harness on itself: two headless copies on this machine play one seeded LAN match over
+  # 127.0.0.1 and a second local address, agree to frame 1800, and each replay plays back to it; a
+  # second copy on another seed is reported FAILED.  One machine, one compiler: see the script.  Skipped
+  # without game data, without a second address, or with the macOS application firewall on.
+  add_test(NAME net_check
+           COMMAND ${CMAKE_CURRENT_SOURCE_DIR}/Tests/run_net_check.sh $<TARGET_FILE:generals>)
+  set_tests_properties(net_check PROPERTIES SKIP_RETURN_CODE 77 TIMEOUT 900)
+  if(ZH_GAME_DATA)
+    set_tests_properties(net_check PROPERTIES ENVIRONMENT "ZH_DATA_DIR=${ZH_GAME_DATA}")
+  endif()
+  # P1 step 3: the staged overlay, <build>/overlay - what the app bundle will copy verbatim and what the
+  # harnesses pass with -overlay - and <build>/overlay-dev, the -scenario and -cinema folders that never
+  # ship.  Tools/stage-overlay.sh is the one place the list lives.  Small (10 MB; the art is linked).
+  file(GLOB_RECURSE ZH_OVERLAY_INPUTS CONFIGURE_DEPENDS ${CMAKE_CURRENT_SOURCE_DIR}/Data/*)
+  add_custom_command(
+    OUTPUT ${CMAKE_BINARY_DIR}/overlay.staged
+    COMMAND ${CMAKE_CURRENT_SOURCE_DIR}/Tools/stage-overlay.sh ${CMAKE_CURRENT_SOURCE_DIR}/Data
+            ${CMAKE_CURRENT_SOURCE_DIR}/../Run ${CMAKE_BINARY_DIR}/overlay
+    DEPENDS ${ZH_OVERLAY_INPUTS} ${CMAKE_CURRENT_SOURCE_DIR}/Tools/stage-overlay.sh
+    COMMENT "Staging the fork's overlay (P1)" VERBATIM)
+  add_custom_target(zh_overlay ALL DEPENDS ${CMAKE_BINARY_DIR}/overlay.staged)
+  add_custom_command(
+    OUTPUT ${CMAKE_BINARY_DIR}/overlay-dev.staged
+    COMMAND ${CMAKE_CURRENT_SOURCE_DIR}/Tools/stage-overlay.sh ${CMAKE_CURRENT_SOURCE_DIR}/Data ""
+            ${CMAKE_BINARY_DIR}/overlay-dev --dev
+    DEPENDS ${ZH_OVERLAY_INPUTS} ${CMAKE_CURRENT_SOURCE_DIR}/Tools/stage-overlay.sh
+    COMMENT "Staging the development-only overlay (P1)" VERBATIM)
+  add_custom_target(zh_overlay_dev ALL DEPENDS ${CMAKE_BINARY_DIR}/overlay-dev.staged)
+
+  # P1 step 5: the macOS app, "Zero Hour Reforged.app" beside the executable, its dSYM beside it
+  # (Tools/make-macos-app.sh: Info.plist, the icon, the staged overlay without the art, which the game reads from
+  # the user data folder's ReforgedArt when something has put it there, the licences checked against generals'
+  # link line, the HUD directive, an ad-hoc signature, verified).  Outside ALL: build it with `ninja macos_app`.
+  # The bundle id belongs to whoever ships; the default is the project's home (the README's).
+  if(APPLE)
+    set(ZH_APP_BUNDLE_ID "io.github.olcayseygan.zero-hour-reforged" CACHE STRING "CFBundleIdentifier of the macOS app")
+    set(ZH_APP_ARGS --generals $<TARGET_FILE:generals> --overlay ${CMAKE_BINARY_DIR}/overlay
+        --build ${CMAKE_BINARY_DIR} --out "${CMAKE_BINARY_DIR}/Zero Hour Reforged.app" --bundle-id ${ZH_APP_BUNDLE_ID}
+        --min-macos ${CMAKE_OSX_DEPLOYMENT_TARGET})
+    # P2 universal2, option A (release time, E2): an x86_64 build's generals, lipo'd into the bundle's
+    set(ZH_X86_64_GENERALS "" CACHE FILEPATH "An x86_64 build's generals, to make the macOS app universal2 (P2)")
+    if(ZH_X86_64_GENERALS)
+      list(APPEND ZH_APP_ARGS --x86-64-generals ${ZH_X86_64_GENERALS})
+    endif()
+    add_custom_target(macos_app
+      COMMAND ${CMAKE_CURRENT_SOURCE_DIR}/Tools/make-macos-app.sh ${ZH_APP_ARGS}
+      DEPENDS generals zh_overlay
+      COMMENT "Building Zero Hour Reforged.app (P1 step 5)" VERBATIM)
+    # the bundle script on itself: a bundle from this build's inputs (no art) holds what it should and
+    # verifies, and a HUD-off INI, an unlicensed library and a write after signing are each caught
+    add_test(NAME macos_app_check
+             COMMAND ${CMAKE_CURRENT_SOURCE_DIR}/Tests/test_macos_app.sh $<TARGET_FILE:generals>
+                     ${CMAKE_BINARY_DIR}/overlay ${CMAKE_BINARY_DIR} ${CMAKE_OSX_DEPLOYMENT_TARGET})
+    set_tests_properties(macos_app_check PROPERTIES SKIP_RETURN_CODE 77 TIMEOUT 600)
+    # E1 on the bundle itself, "tests what ships": no -root, no -overlay, the seal checked after.  It needs
+    # `ninja macos_app` first (outside ALL), and says so when it skips.
+    add_test(NAME replay_check_app
+             COMMAND bash -c "if [ ! -x \"$1/Contents/MacOS/generals\" ]; then echo \"skip: no bundle at $1 - build it with ninja macos_app\"; exit 77; fi; exec \"$0\" --app \"$1\" --seeds 0 --maxframes 1200"
+                     ${CMAKE_CURRENT_SOURCE_DIR}/Tools/replay-check.sh "${CMAKE_BINARY_DIR}/Zero Hour Reforged.app")
+    set_tests_properties(replay_check_app PROPERTIES SKIP_RETURN_CODE 77 TIMEOUT 600)
+    if(ZH_GAME_DATA)
+      set_tests_properties(replay_check_app PROPERTIES ENVIRONMENT "ZH_DATA_DIR=${ZH_GAME_DATA}")
+    endif()
+  endif()
+
+  # The first launch's folder question, headless (no test run may need a human): the real generals
+  # through PosixMain's test stand-in for the dialog (ZH_TEST_CHOOSER_ANSWERS) - refusals and their reasons,
+  # asking again, accepting and remembering, cancelling, and the second start asking nothing.  Needs ZH_GAME_DATA.
+  add_test(NAME first_launch_chooser_check
+           COMMAND ${CMAKE_CURRENT_SOURCE_DIR}/Tests/test_first_launch_chooser.sh $<TARGET_FILE:generals> ${CMAKE_BINARY_DIR}/overlay)
+  set_tests_properties(first_launch_chooser_check PROPERTIES SKIP_RETURN_CODE 77 TIMEOUT 600)
+  if(ZH_GAME_DATA)
+    set_tests_properties(first_launch_chooser_check PROPERTIES ENVIRONMENT "ZH_DATA_DIR=${ZH_GAME_DATA}")
+  endif()
+
+  # P3: Tools/linux-portable.sh's folder for the Steam Deck, built inside the Steam Runtime's SDK, and E1 through
+  # its own launcher in the Steam Runtime's platform image.  Skipped (77) without docker, the SDK image, or a
+  # portable CMake (ZH_PORTABLE_CMAKE: 3.29 or later, running inside the container - Kitware's release tarball).
+  if(ZH_PLATFORM_LINUX)
+    set(ZH_PORTABLE_CMAKE "" CACHE FILEPATH "A Linux CMake (3.29+, Kitware's release) for linux_portable_check's container build (P3)")
+    add_test(NAME linux_portable_check
+             COMMAND ${CMAKE_CURRENT_SOURCE_DIR}/Tests/test_linux_portable.sh ${CMAKE_BINARY_DIR})
+    set(_zh_portable_env "ZH_PORTABLE_CMAKE=${ZH_PORTABLE_CMAKE}")
+    if(ZH_GAME_DATA)
+      list(APPEND _zh_portable_env "ZH_DATA_DIR=${ZH_GAME_DATA}")
+    endif()
+    set_tests_properties(linux_portable_check PROPERTIES SKIP_RETURN_CODE 77 TIMEOUT 7200 ENVIRONMENT "${_zh_portable_env}")
+  endif()
+
+  # P1 step 1: the fork's overlay as a read root gives the game what Windows' one folder gives it - the
+  # EXE CRC, the INI CRC and the world state agree between the two layouts - with two armed controls.
+  add_test(NAME overlay_crc_check
+           COMMAND ${CMAKE_CURRENT_SOURCE_DIR}/Tools/overlay-crc-check.sh --generals $<TARGET_FILE:generals>)
+  set_tests_properties(overlay_crc_check PROPERTIES SKIP_RETURN_CODE 77 TIMEOUT 600)
+  if(ZH_GAME_DATA)
+    set_tests_properties(overlay_crc_check PROPERTIES ENVIRONMENT "ZH_DATA_DIR=${ZH_GAME_DATA}")
+  endif()
+  # The INI masters' line ends: the overlay staged from an LF and from a CRLF checkout holds the same CRLF
+  # bytes, and with the game's data the INI CRC agrees from both, while LF files (the armed control)
+  # give another - the CRC a Windows build has, or none of its joins (.gitattributes, stage-overlay.sh).
+  add_test(NAME ini_crlf_check
+           COMMAND ${CMAKE_CURRENT_SOURCE_DIR}/Tests/run_ini_crlf_check.sh $<TARGET_FILE:generals>)
+  set_tests_properties(ini_crlf_check PROPERTIES SKIP_RETURN_CODE 77 TIMEOUT 600)
+  if(ZH_GAME_DATA)
+    set_tests_properties(ini_crlf_check PROPERTIES ENVIRONMENT "ZH_DATA_DIR=${ZH_GAME_DATA}")
+  endif()
+  # P1 step 2: the roots are read-only - GameEngine::init's INIZH.big delete is refused, the farm and the
+  # install are unchanged after a skirmish; -writableRoot in a root with no links does delete; and a run
+  # from inside an app bundle logs to the user data's Logs, not into the bundle.
+  # P1 step 3: every path the game can open resolves the same in Windows' one-folder shape and in the
+  # package's root plus -overlay (the staged overlay), path by path, with an archive-order control.
+  add_test(NAME packaging_resolution_check
+           COMMAND ${CMAKE_CURRENT_SOURCE_DIR}/Tools/packaging-resolution-check.sh --generals $<TARGET_FILE:generals>)
+  set_tests_properties(packaging_resolution_check PROPERTIES SKIP_RETURN_CODE 77 TIMEOUT 600)
+  if(ZH_GAME_DATA)
+    set_tests_properties(packaging_resolution_check PROPERTIES ENVIRONMENT "ZH_DATA_DIR=${ZH_GAME_DATA}")
+  endif()
+  # Their install check (Tools/install-guard.sh) on a made-up install: a change, and a check that could not
+  # be made, are told apart.  No game data.
+  # The stager keeps the HUD overlay's default the build's (off in Release): it refuses a staged ShowHudOverlay =
+  # Yes, loose or in an archive.
+  add_test(NAME stage_overlay_hud_check COMMAND ${CMAKE_CURRENT_SOURCE_DIR}/Tests/test_stage_overlay_hud.sh)
+  add_test(NAME install_guard_check COMMAND ${CMAKE_CURRENT_SOURCE_DIR}/Tests/test_install_guard.sh)
+  # Every harness stops when its work folder cannot be made, instead of going on with the name empty
+  # (Tests/test_workfolder_guard.sh): a lint of every tracked script, and the farm harnesses run with
+  # TMPDIR=/nonexistent.
+  add_test(NAME workfolder_guard_check COMMAND ${CMAKE_CURRENT_SOURCE_DIR}/Tests/test_workfolder_guard.sh)
+  # Decision 2 for the GPU: a first launch chooses the top detail preset (High), a later one keeps it, and
+  # -noshaders (a Voodoo2, below every preset) chooses Low.  Read from Options.ini after real runs.
+  add_test(NAME lod_first_run_check
+           COMMAND ${CMAKE_CURRENT_SOURCE_DIR}/Tools/lod-first-run-check.sh --generals $<TARGET_FILE:generals>)
+  set_tests_properties(lod_first_run_check PROPERTIES SKIP_RETURN_CODE 77 TIMEOUT 600)
+  if(ZH_GAME_DATA)
+    set_tests_properties(lod_first_run_check PROPERTIES ENVIRONMENT "ZH_DATA_DIR=${ZH_GAME_DATA}")
+  endif()
+  add_test(NAME root_readonly_check
+           COMMAND ${CMAKE_CURRENT_SOURCE_DIR}/Tools/root-readonly-check.sh --generals $<TARGET_FILE:generals>)
+  set_tests_properties(root_readonly_check PROPERTIES SKIP_RETURN_CODE 77 TIMEOUT 600)
+  if(ZH_GAME_DATA)
+    set_tests_properties(root_readonly_check PROPERTIES ENVIRONMENT "ZH_DATA_DIR=${ZH_GAME_DATA}")
+  endif()
+endif()
+
+# ===========================================================================
+# Tests.  Run with:  ctest --test-dir build -C Release --output-on-failure
+# ===========================================================================
+enable_testing()
+
+set(TESTS ${CMAKE_CURRENT_SOURCE_DIR}/Tests)
+
+# Shared runner for the micro-harness in Tests/test_harness.h; every test
+# binary links it instead of writing its own main().
+add_library(test_harness STATIC ${TESTS}/test_main.cpp)
+target_include_directories(test_harness PUBLIC ${TESTS})
+# Off Windows, every binary that links the harness - its own main() or the runner's - refuses to start
+# without ZH_USER_DATA_DIR, which otherwise leaves the engine to use this user's real data directory.
+# An INTERFACE source so it is compiled into each executable, where a static library's object would be
+# dropped by any binary that does not reference it.  ctest gives each test its folder at the end of
+# this file.
+if(ZH_PLATFORM_POSIX)
+  target_sources(test_harness INTERFACE ${TESTS}/test_user_data_guard.cpp)
+endif()
+
+# add_lib_test(<name> [PENDING_MACOS] <libs...>) -> Tests/<name>.cpp, built and registered.
+#
+# PENDING_MACOS says the test's libraries are ones the macOS port has not brought up yet.  On a Mac
+# the executable is still defined - tasks B1-B6 need something to compile - but it stays out of the
+# default build and out of ctest, because a test that cannot be linked is not a failing test, it is
+# a test that does not exist here yet.  On Windows the keyword changes nothing at all.
+function(add_lib_test name)
+  # add_lib_test(<name> <libs...> [ARGS <arguments for the ctest entry...>])
+  set(libs ${ARGN})
+  set(test_args "")
+  list(FIND libs ARGS _zh_args_at)
+  if(NOT _zh_args_at EQUAL -1)
+    list(SUBLIST libs ${_zh_args_at} -1 test_args)
+    list(REMOVE_AT test_args 0)
+    list(SUBLIST libs 0 ${_zh_args_at} libs)
+  endif()
+  set(exclude "")
+  if("PENDING_MACOS" IN_LIST libs)
+    list(REMOVE_ITEM libs PENDING_MACOS)
+    set(exclude "${ZH_NOT_YET_PORTABLE}")
+  endif()
+  add_executable(${name} ${exclude} ${TESTS}/${name}.cpp)
+  target_link_libraries(${name} PRIVATE test_harness ${libs})
+  add_test(NAME ${name} COMMAND ${name} ${test_args})
+  if(NOT exclude STREQUAL "")
+    # PENDING_MACOS used to skip add_test() altogether, so `ctest` on macOS
+    # listed 11 tests where Windows lists 16 and said nothing about the other
+    # five.  An absent test reads exactly like a passing one, and "ctest is
+    # green" was being taken as evidence of progress across the whole port.
+    # Registering it DISABLED keeps it out of the run - the binary is
+    # EXCLUDE_FROM_ALL and would not link - and puts it in the output, which is
+    # where a test somebody still owes belongs.
+    set_tests_properties(${name} PROPERTIES DISABLED TRUE)
+    set_property(GLOBAL APPEND PROPERTY ZH_DEFERRED_TESTS ${name})
+  endif()
+endfunction()
+
+# Platform/MsvcFloatCasts.h: float-to-unsigned conversions as MSVC computes them.  Built on every
+# platform; on Windows it also holds MSVC's own cast to the same bytes.
+add_lib_test(test_msvc_float_casts)
+target_include_directories(test_msvc_float_casts PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/Libraries/Include)
+
+add_lib_test(test_wwmath wwmath wwlib wwsaveload wwdebug)
+target_include_directories(test_wwmath PRIVATE ${WW}/WWLib ${WW}/WWSaveLoad ${WW}/Wwutil)
+# R1, smooth motion: W3DSmoothMotion.h's blend and verdicts, header-only over WWMath.
+add_lib_test(test_smooth_motion wwmath wwlib wwsaveload wwdebug)
+target_include_directories(test_smooth_motion PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/GameEngineDevice/Include ${WW}/WWLib)
+
+add_lib_test(test_wwlib wwlib wwmath wwsaveload wwdebug)
+target_include_directories(test_wwlib PRIVATE ${WW}/WWLib ${WW}/WWMath ${WW}/WWSaveLoad ${WW}/Wwutil)
+# generals.exe is linked /LARGEADDRESSAWARE, and that flag changes what
+# GlobalMemoryStatus saturates its 32-bit fields to (0xFFFFFFFF, not 0x7FFFFFFF).
+# cpudetect_memory_fits_in_the_signed_int_its_callers_use only means anything in a
+# binary that sees the same value the game does.
+# A cl.exe linker switch, so it asks the compiler rather than the platform.
+if(MSVC)
+  target_link_options(test_wwlib PRIVATE /LARGEADDRESSAWARE)
+endif()
+
+add_lib_test(test_wwsaveload wwsaveload wwlib wwmath wwdebug)
+target_include_directories(test_wwsaveload PRIVATE ${WW}/WWSaveLoad ${WW}/WWLib ${WW}/WWMath ${WW}/WWDebug ${WW}/Wwutil)
+
+add_lib_test(test_wwutil wwutil wwmath wwlib wwdebug)
+target_include_directories(test_wwutil PRIVATE ${WW}/Wwutil ${WW}/WWLib ${WW}/WWMath)
+
+# Lib/Clock.h is header-only and links nothing, so this runs on both platforms from day one -
+# which matters, because the macOS half of that header is the half nobody has ever executed.
+add_lib_test(test_clock)
+if(ZH_PLATFORM_WINDOWS)
+  target_link_libraries(test_clock PRIVATE winmm)		# Clock.h's Windows half: timeGetTime, timeBeginPeriod (W2)
+endif()
+
+add_lib_test(test_compression compression)
+
+# .w3d on-disk layout pins.  Deliberately OUTSIDE the ZH_PLATFORM_WINDOWS guard
+# below: it is header-only, asserts sizeof/offsetof and links nothing but the
+# harness, so it builds on a platform where ww3d2 itself does not compile yet -
+# which is the whole of M1 and the only time these asserts can still catch
+# something.
+add_lib_test(test_w3dlayout)
+target_include_directories(test_w3dlayout PRIVATE
+  # Libraries/Include is here because always.h reaches Platform/MSVCCompat.h, which B3 added after
+  # B7 wrote this target.  Neither branch could see the other; it only fails once both are merged.
+  ${CMAKE_CURRENT_SOURCE_DIR}/Libraries/Include
+  ${WW}/WW3D2 ${WW}/WWLib ${WW}/WWMath ${WW}/WWDebug ${WW}/WWSaveLoad ${WW}/Wwutil)
+
+# The vertex program generator is shared (ffvertex builds everywhere), so its unit test runs everywhere:
+# registered on Windows only, it went stale through port defects 23 and 26, which changed the generator
+# off Windows (W2).
+add_lib_test(test_ffvertex ffvertex)
+
+# Every test from here to test_pixelcentre links the renderer or a Direct3D backend, so they exist
+# only where those targets do.  D2 through D5 bring the Metal side back with tests of its own.
+if(ZH_PLATFORM_WINDOWS)
+add_lib_test(test_ww3d2 ww3d2 wwsaveload wwlib wwmath wwdebug)
+target_include_directories(test_ww3d2 PRIVATE
+  ${WW}/WW3D2 ${WW}/WWLib ${WW}/WWMath ${WW}/WWDebug ${WW}/WWSaveLoad ${WW}/Wwutil)
+
+
+add_lib_test(test_ffshader ffshader)
+add_lib_test(test_dx11device dx11device)
+add_lib_test(test_dx11state dx11state)
+add_lib_test(test_dx11layout dx11layout)
+add_lib_test(test_ffvertexcompile ffvertex ffshader)
+# The generated vertex program run against the fixed-function pipeline it replaces, on a real
+# Direct3D 9 device.  It skips itself on a machine with no device rather than failing.
+add_lib_test(test_ffvertexd3d9 ffvertex d3d9 user32)
+add_lib_test(test_ffshadercompile ffshader)
+add_lib_test(test_dx11pipeline dx11device dx11state dx11layout ffshader ffvertex)
+add_lib_test(test_dx11resource dx11resource dx11device)
+add_lib_test(test_engineshader engineshader)
+add_lib_test(test_dx11backend dx11backend)
+add_lib_test(test_dx11post dx11post dx11device user32)
+add_lib_test(test_dx11twin dx11twin dx11device)
+add_lib_test(test_dx11texture dx11texture dx11device user32)
+# Both runtimes in one binary, so where a triangle edge lands is a measurement rather than a reading
+# of two sets of documentation that describe the same thing in different words.
+add_lib_test(test_pixelcentre dx11backend dx11resource dx11device d3d9 user32)
+endif()  # ZH_PLATFORM_WINDOWS - renderer and Direct3D backend tests
+
+# wwdownload, debug and eabrowserdispatch are Windows-only libraries above, so their tests are too.
+if(ZH_PLATFORM_WINDOWS)
+add_lib_test(test_wwdownload wwdownload)
+target_include_directories(test_wwdownload PRIVATE ${WW}/WWDownload)
+# A Debug wwdownload logs through DebugLog, which the engine defines; the test links no engine.
+target_sources(test_wwdownload PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/Tests/test_wwdownload_stubs.cpp)
+
+add_lib_test(test_debug debuglib)
+
+add_lib_test(test_support benchmark eabrowserdispatch)
+endif()  # ZH_PLATFORM_WINDOWS - Windows-only support library tests
+
+# W3: in a Debug build WWVegas and GameMemory.cpp call the engine's debug entry points (DebugCrash, the
+# file-and-line operator new, the stack dumper, ...), and these tests link no engine.  One stub file gives
+# each what it lacks; outside _DEBUG it compiles to nothing, so a Release link is unchanged.
+if(MSVC)
+  foreach(name test_wwlib test_wwmath test_smooth_motion wwmath_selfcheck test_wwsaveload test_wwutil
+               test_ww3d2 gametext_csf test_premain_strings test_premain_unicode)
+    if(TARGET ${name})
+      target_sources(${name} PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/Tests/debug_build_stubs.cpp)
+    endif()
+  endforeach()
+  foreach(name test_wwlib test_wwmath test_smooth_motion wwmath_selfcheck test_wwsaveload test_wwutil
+               test_ww3d2)
+    if(TARGET ${name})
+      target_compile_definitions(${name} PRIVATE ZH_DEBUG_STUBS_WWVEGAS)
+    endif()
+  endforeach()
+  foreach(name widechar_crc_gate widechar_file_selfcheck widechar_format_selfcheck)
+    target_sources(${name} PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/Tests/debug_build_stubs.cpp)
+  endforeach()
+  foreach(name widechar_crc_gate widechar_file_selfcheck widechar_format_selfcheck gametext_csf
+               test_premain_strings test_premain_unicode)
+    target_compile_definitions(${name} PRIVATE ZH_DEBUG_STUBS_CRASH)
+  endforeach()
+  target_compile_definitions(gametext_csf PRIVATE ZH_DEBUG_STUBS_GAMEMEMORY)
+  target_compile_definitions(test_premain_strings PRIVATE ZH_DEBUG_STUBS_GAMEMEMORY ZH_DEBUG_STUBS_GLOBALDATA)
+  target_compile_definitions(test_premain_unicode PRIVATE ZH_DEBUG_STUBS_GAMEMEMORY ZH_DEBUG_STUBS_GLOBALDATA)
+endif()
+
+# Phase 3 checkpoint: boots the memory manager, name keys and file system, then
+# runs a real INI file through the parser.
+# The money sweep (every_start_reaches_its_money_and_has_two_ways_out, 62 generated maps) was 125 s of
+# test_gameengine's 162 s on one Linux host: it is three cases, one per player count, each its own entry
+# below, so ctest -j runs them beside each other and beside the rest.  Only they are split out: the rest
+# stays one process, in one order, so a failure that depends on what ran before still shows.
+add_lib_test(test_gameengine gameengine ARGS --exclude=every_start_reaches_its_money_and_has_two_ways_out_)
+foreach(_zh_players 2 4 8)
+  add_test(NAME test_gameengine_money_sweep_${_zh_players}_players
+           COMMAND test_gameengine every_start_reaches_its_money_and_has_two_ways_out_${_zh_players}_players)
+  set_tests_properties(test_gameengine_money_sweep_${_zh_players}_players PROPERTIES TIMEOUT 2700)
+endforeach()
+# T1's terrain golden against the moved code (GameLogic/WorldHeightMapData, TerrainHeightSampling):
+# nine shipped maps out of the install's archives, which must sample exactly as Tests/terrain_golden.txt
+# says the original W3D code did.  Needs ZH_GAME_DATA; Skipped (77) without it.
+# Port defect 29: the LAN lobby's broadcast listener off Windows, through the real Transport and UDP, in the
+# layout two copies of the game on one host build (see the test's header).  POSIX only: the listener is.
+if(ZH_PLATFORM_POSIX)
+  add_lib_test(test_lan_broadcast gameengine)
+  # the exe's names and the device layer, as test_terrain_golden links them
+  target_sources(test_lan_broadcast PRIVATE ${TESTS}/test_gameengine_stubs.cpp)
+  target_link_libraries(test_lan_broadcast PRIVATE posixdevice w3ddevice)
+  # W1: the same sockets between two hosts, driven by hand from each (a tool, not a test: it needs a peer)
+  add_executable(lan_broadcast_probe ${TESTS}/lan_broadcast_probe.cpp ${TESTS}/test_gameengine_stubs.cpp)
+  target_link_libraries(lan_broadcast_probe PRIVATE gameengine posixdevice w3ddevice)
+endif()
+add_lib_test(test_terrain_golden gameengine)
+target_compile_definitions(test_terrain_golden PRIVATE
+  TERRAIN_GOLDEN_FILE="${CMAKE_CURRENT_SOURCE_DIR}/Tests/terrain_golden.txt")
+set_target_properties(test_terrain_golden PROPERTIES CXX_STANDARD 17)
+set_tests_properties(test_terrain_golden PROPERTIES SKIP_RETURN_CODE 77)
+# test_gameengine's stubs: the exe's names everywhere, and on Windows the device layer's stand-ins,
+# which off Windows PosixDevice (the CD manager) and W3DDevice (the renderer's hooks) have for real.
+target_sources(test_terrain_golden PRIVATE ${TESTS}/test_gameengine_stubs.cpp)
+if(ZH_PLATFORM_POSIX)
+  target_link_libraries(test_terrain_golden PRIVATE posixdevice w3ddevice)
+endif()
+if(ZH_GAME_DATA)
+  set_tests_properties(test_terrain_golden PROPERTIES ENVIRONMENT "ZH_DATA_DIR=${ZH_GAME_DATA}")
+endif()
+# T1c (defect 17): the water grid's step, moved to the top of each logic frame, against the original
+# code's output under EA's one-pass-per-frame loop (Tests/water_grid_oracle.cpp), under catch-up too.
+add_lib_test(test_water_grid gameengine)
+target_sources(test_water_grid PRIVATE ${TESTS}/test_gameengine_stubs.cpp)
+set_target_properties(test_water_grid PROPERTIES CXX_STANDARD 17)
+if(ZH_PLATFORM_POSIX)
+  target_link_libraries(test_water_grid PRIVATE posixdevice w3ddevice)
+endif()
+# Off Windows the device layer's hooks are the game's own: the renderer's from W3DDevice, the CD
+# manager from PosixDevice.  On Windows the test's own stubs stand in for gameenginedevice, which it
+# does not link (B6).
+if(ZH_PLATFORM_POSIX)
+  target_link_libraries(test_gameengine PRIVATE posixdevice w3ddevice)
+endif()
+# the well-known Dict keys and a handful of device/exe entry points live in
+# GameEngineDevice, which Phase 4 ports; stand-ins until then.
+target_sources(test_gameengine PRIVATE ${TESTS}/test_gameengine_stubs.cpp)
+set_target_properties(test_gameengine PROPERTIES CXX_STANDARD 17)
+# 454 cases in 98 s in Release; a Debug build runs them far slower (W3), so its ceiling is its own.
+set_tests_properties(test_gameengine PROPERTIES TIMEOUT 2700)
+# simulation_uses_no_runtime_trig reads the engine's own sources back off disk to prove nothing in
+# GameLogic or Common has gone back to calling sinf().
+# fxlist_reforged_ini_parses_and_keeps_its_light runs the fork's own FXList file through the real
+# INI parser, so it needs the tracked master rather than whatever sits in Run/.
+# the_options_menu_buttons_all_wear_one_font reads the tracked layout master, not Run/'s copy.
+# the_spectator_page_names_only_on_off_options reads the tracked page master the same way, and
+# the_command_grid_keys_are_the_places_and_n_sells_and_b_rallies the tracked command map.
+target_compile_definitions(test_gameengine PRIVATE
+  GAMEENGINE_SOURCE_DIR="${CMAKE_CURRENT_SOURCE_DIR}/GameEngine"
+  FXLIST_REFORGED_INI="${CMAKE_CURRENT_SOURCE_DIR}/Data/INI/FXListReforged.ini"
+  OPTIONS_MENU_WND="${CMAKE_CURRENT_SOURCE_DIR}/Data/Window/Menus/OptionsMenu.wnd"
+  SPECTATOR_HTML="${CMAKE_CURRENT_SOURCE_DIR}/Data/Window/Html/Spectator.html"
+  COMMAND_MAP_REFORGED_INI="${CMAKE_CURRENT_SOURCE_DIR}/Data/INI/CommandMapReforged.ini"
+  PLATE_TEXTURE_DIR="${CMAKE_CURRENT_SOURCE_DIR}/Data/Art/Textures")
+
+# W3: these three link the engine without its device and WinMain, whose Debug-only names it reads
+# (Tests/debug_build_stubs.cpp; empty outside _DEBUG).
+if(MSVC)
+  foreach(name test_gameengine test_terrain_golden test_water_grid)
+    target_sources(${name} PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/Tests/debug_build_stubs.cpp)
+    target_compile_definitions(${name} PRIVATE ZH_DEBUG_STUBS_ENGINE)
+  endforeach()
+endif()
+
+# The three hand-written self-checks predate the harness; run them from ctest
+# too so one command covers everything.
+add_test(NAME detround_selfcheck COMMAND detround_selfcheck)
+if(ZH_PLATFORM_POSIX)
+  add_test(NAME fpucontrol_selfcheck COMMAND fpucontrol_selfcheck)
+endif()
+add_test(NAME d3dxportable_selfcheck COMMAND d3dxportable_selfcheck)
+add_test(NAME wwmath_selfcheck COMMAND wwmath_selfcheck)
+add_test(NAME compression_selfcheck COMMAND compression_selfcheck)
+# The device and codec smoke tests below belong to targets only a Windows configuration defines.
+if(ZH_PLATFORM_WINDOWS)
+# dx9_smoke creates a device the way the renderer does, with nothing next to it to
+# translate anything, and puts the D3D8 calls that have no D3D9 counterpart through their
+# replacements.  "-msaa 4" adds the multisampled back buffer and the plain render target
+# with a depth buffer of its own that DX8Wrapper::_Get_Non_MultiSampled_Depth_Buffer pairs
+# for the screen filters.
+add_test(NAME dx9_smoke COMMAND dx9_smoke)
+add_test(NAME dx9_smoke_msaa COMMAND dx9_smoke -msaa 4)
+# 77 is ARM64's: no d3dx9_43.dll exists for it, and dx9_smoke says so rather than failing.
+set_tests_properties(dx9_smoke dx9_smoke_msaa PROPERTIES SKIP_RETURN_CODE 77)
+
+# bink_smoke decodes a real .bik with the player this build links and compares what comes out
+# against the values read straight from the file's own header, so a wrong field offset or a wrong
+# surface constant shows up as a mismatch.  It runs from Run/, where the movies and the FFmpeg DLLs
+# are; without game data it prints "skip".
+add_executable(bink_smoke ${TESTS}/bink_smoke.c)
+target_include_directories(bink_smoke PRIVATE ${WW}/Bink/include)
+target_compile_definitions(bink_smoke PRIVATE BINK_LINKED_PLAYER)
+target_link_libraries(bink_smoke PRIVATE binkvideo)
+add_test(NAME bink_smoke COMMAND bink_smoke Data/Movies/GC_Background.bik
+         WORKING_DIRECTORY ${CMAKE_CURRENT_SOURCE_DIR}/../Run)
+
+# miles_smoke plays a tone through the audio backend and waits for the end-of-sample callback,
+# which only arrives once a voice has played the buffer out.
+add_executable(miles_smoke ${TESTS}/miles_smoke.cpp)
+target_include_directories(miles_smoke PRIVATE ${WW}/Miles6/include)
+target_link_libraries(miles_smoke PRIVATE milesaudio)
+# From Run/, where the FFmpeg DLLs the backend decodes with are.
+add_test(NAME miles_smoke COMMAND miles_smoke
+         WORKING_DIRECTORY ${CMAKE_CURRENT_SOURCE_DIR}/../Run)
+endif()  # ZH_PLATFORM_WINDOWS - device and codec smoke tests
+
+if(ZH_PLATFORM_POSIX)
+# The audio backend's checks off Windows, on miniaudio's null backend so they run with no audio
+# hardware: a device that still calls the mix in real time.  miles_smoke is the same file Windows
+# runs.  test_miles_miniaudio listens to the mix through AIL_ex_start_capture and measures what
+# miles_xaudio2 would have produced; the half of it that needs the game's .big files reads them from
+# ZH_GAME_DATA (a folder holding generals/ and zerohour/, read only) and prints "skip" without it.
+set(ZH_GAME_DATA "" CACHE PATH "Folder with a Zero Hour install's generals/ and zerohour/, for tests that read game data")
+add_executable(miles_smoke ${TESTS}/miles_smoke.cpp)
+target_include_directories(miles_smoke PRIVATE ${WW}/Miles6/include)
+target_link_libraries(miles_smoke PRIVATE milesaudio)
+add_test(NAME miles_smoke COMMAND miles_smoke)
+set_tests_properties(miles_smoke PROPERTIES ENVIRONMENT "ZH_AUDIO_BACKEND=null")
+
+add_executable(test_miles_miniaudio ${TESTS}/test_miles_miniaudio.cpp)
+target_include_directories(test_miles_miniaudio PRIVATE ${WW}/Miles6/include ${LIBSRC}/miniaudio)
+target_link_libraries(test_miles_miniaudio PRIVATE test_harness milesaudio miniaudio)
+add_test(NAME test_miles_miniaudio COMMAND test_miles_miniaudio)
+# ZH_DATA_DIR is set only when ZH_GAME_DATA was configured.  Setting it unconditionally overwrote a
+# ZH_DATA_DIR from the caller's environment with an empty string, and the data half skipped silently.
+if(ZH_GAME_DATA)
+  set_tests_properties(test_miles_miniaudio PROPERTIES
+    ENVIRONMENT "ZH_AUDIO_BACKEND=null;ZH_DATA_DIR=${ZH_GAME_DATA}")
+else()
+  set_tests_properties(test_miles_miniaudio PROPERTIES ENVIRONMENT "ZH_AUDIO_BACKEND=null")
+endif()
+
+# For human ears, not ctest: plays one sound from a .big archive (or a loose file) on the real
+# device, through the same API, at a chosen volume and pan.
+add_executable(miles_listen ${TESTS}/miles_listen.cpp)
+target_include_directories(miles_listen PRIVATE ${WW}/Miles6/include)
+target_link_libraries(miles_listen PRIVATE milesaudio)
+endif()  # ZH_PLATFORM_POSIX - audio backend checks
+
+if(ZH_PLATFORM_POSIX)
+# The engine's paths against a POSIX file system (C1): the default volume, and on macOS a
+# case-sensitive APFS image it creates, since neither macOS's default volume nor the Steam installs'
+# exFAT tells case apart.  Linux's runs are case-sensitive already.
+add_lib_test(test_posixpath wwlib wwdebug)
+# P1 step 4: where the player's Zero Hour is - -root, Registry.ini, the known places, the chooser (a stub
+# here: the real one, SDL's folder dialog, needs a person), and every validation message.
+add_lib_test(test_install_root installroot wwlib wwdebug)
+target_include_directories(test_posixpath PRIVATE ${WW}/WWLib ${WW}/WWDebug)
+
+# PosixLocalFileSystem through the engine's own interface (C1): built from the real memory manager,
+# LocalFile, File and PosixDevice sources with gameengine's include paths and definitions, because
+# gameengine does not link on macOS yet.  The few names those sources reach and the test does not are
+# in its _stubs.cpp, which says why each one is there.  Under GCC they also name ~AudioEventRTS and
+# UnicodeString::releaseBuffer (eager vtables): UnicodeString.cpp is the real one, and the destructor
+# is stubbed by Tests/gcc_eager_vtable_stubs.cpp (L1b; they were DISABLED on Linux until then).
+set(ZH_POSIXLFS_SOURCES_NO_MAIN
+  ${GE}/Source/Common/System/GameMemory.cpp ${GE}/Source/Common/System/MemoryInit.cpp
+  ${GE}/Source/Common/System/CriticalSection.cpp ${GE}/Source/Common/System/JobSystem.cpp
+  ${GE}/Source/GameLogic/System/FPUControl.cpp ${GE}/Source/Common/System/ExecutableDirectory.cpp
+  ${GE}/Source/Common/System/SubsystemInterface.cpp ${GE}/Source/Common/System/AsciiString.cpp
+  ${GE}/Source/Common/System/WideCharFns.cpp ${GE}/Source/Common/System/File.cpp
+  ${GE}/Source/Common/System/LocalFile.cpp ${GE}/Source/Common/System/LocalFileSystem.cpp
+  ${GE}/Source/Common/System/RAMFile.cpp ${GE}/Source/Common/System/registry.cpp
+  ${GE}/Source/Common/System/UnicodeString.cpp ${CMAKE_CURRENT_SOURCE_DIR}/Tests/gcc_eager_vtable_stubs.cpp
+  ${CMAKE_CURRENT_SOURCE_DIR}/GameEngineDevice/Source/PosixDevice/Common/PosixLocalFileSystem.cpp
+  ${CMAKE_CURRENT_SOURCE_DIR}/GameEngineDevice/Source/PosixDevice/Common/PosixLocalFile.cpp)
+# The same list with the test's own two files, as test_registryfile and test_wwdownload_registry take it.
+set(ZH_POSIXLFS_SOURCES
+  ${TESTS}/test_posixlocalfilesystem.cpp ${TESTS}/test_posixlocalfilesystem_stubs.cpp ${ZH_POSIXLFS_SOURCES_NO_MAIN})
+add_executable(test_posixlocalfilesystem ${ZH_POSIXLFS_SOURCES})
+target_include_directories(test_posixlocalfilesystem PRIVATE
+  $<TARGET_PROPERTY:gameengine,INCLUDE_DIRECTORIES> ${CMAKE_CURRENT_SOURCE_DIR}/GameEngineDevice/Include)
+target_compile_definitions(test_posixlocalfilesystem PRIVATE $<TARGET_PROPERTY:gameengine,COMPILE_DEFINITIONS>
+  ZH_EAGER_VTABLE_STUB_NO_POOL)
+set_target_properties(test_posixlocalfilesystem PROPERTIES CXX_STANDARD 17)
+target_link_libraries(test_posixlocalfilesystem PRIVATE test_harness wwlib wwdebug)
+add_test(NAME test_posixlocalfilesystem COMMAND test_posixlocalfilesystem)
+
+# Registry.ini's reader and writer (Common/RegistryFile.h, registry.cpp's POSIX half), from the same
+# engine sources as test_posixlocalfilesystem, for the same reason, and not on Linux for the same one.
+set(ZH_REGISTRYFILE_SOURCES ${ZH_POSIXLFS_SOURCES})
+list(REMOVE_ITEM ZH_REGISTRYFILE_SOURCES ${TESTS}/test_posixlocalfilesystem.cpp)
+list(APPEND ZH_REGISTRYFILE_SOURCES ${TESTS}/test_registryfile.cpp)
+add_executable(test_registryfile ${ZH_REGISTRYFILE_SOURCES})
+target_include_directories(test_registryfile PRIVATE
+  $<TARGET_PROPERTY:gameengine,INCLUDE_DIRECTORIES> ${CMAKE_CURRENT_SOURCE_DIR}/GameEngineDevice/Include)
+target_compile_definitions(test_registryfile PRIVATE $<TARGET_PROPERTY:gameengine,COMPILE_DEFINITIONS>
+  ZH_EAGER_VTABLE_STUB_NO_POOL)
+set_target_properties(test_registryfile PROPERTIES CXX_STANDARD 17)
+target_link_libraries(test_registryfile PRIVATE test_harness wwlib wwdebug)
+add_test(NAME test_registryfile COMMAND test_registryfile)
+
+# WWDownload's registry functions and FormatURLFromRegistry off Windows (WWDownloadRegistryPosix.cpp)
+# over this user's Registry.ini, read back through registry.cpp's own getters too (B6).  Writes only
+# into a folder in the build tree.  POSIX only: on Windows they are wwdownload's, over the registry.
+if(ZH_PLATFORM_POSIX)
+  set(ZH_WWDOWNLOAD_REGISTRY_SOURCES ${ZH_REGISTRYFILE_SOURCES})
+  list(REMOVE_ITEM ZH_WWDOWNLOAD_REGISTRY_SOURCES ${TESTS}/test_registryfile.cpp)
+  list(APPEND ZH_WWDOWNLOAD_REGISTRY_SOURCES ${TESTS}/test_wwdownload_registry.cpp
+    ${GE}/Source/Common/System/WWDownloadRegistryPosix.cpp)
+  add_executable(test_wwdownload_registry ${ZH_WWDOWNLOAD_REGISTRY_SOURCES})
+  target_include_directories(test_wwdownload_registry PRIVATE
+    $<TARGET_PROPERTY:gameengine,INCLUDE_DIRECTORIES> ${CMAKE_CURRENT_SOURCE_DIR}/GameEngineDevice/Include)
+  target_compile_definitions(test_wwdownload_registry PRIVATE $<TARGET_PROPERTY:gameengine,COMPILE_DEFINITIONS>
+    ZH_EAGER_VTABLE_STUB_NO_POOL)
+  set_target_properties(test_wwdownload_registry PROPERTIES CXX_STANDARD 17)
+  target_link_libraries(test_wwdownload_registry PRIVATE test_harness wwlib wwdebug)
+  add_test(NAME test_wwdownload_registry COMMAND test_wwdownload_registry)
+endif()
+
+# The user's folders off Windows (C1 (e)): the user data directory and the Desktop, EarlyOptions.h's
+# POSIX half.  Writes only under $TMPDIR.
+add_executable(test_userfolders ${TESTS}/test_userfolders.cpp)
+target_include_directories(test_userfolders PRIVATE $<TARGET_PROPERTY:gameengine,INCLUDE_DIRECTORIES>)
+target_compile_definitions(test_userfolders PRIVATE $<TARGET_PROPERTY:gameengine,COMPILE_DEFINITIONS>)
+set_target_properties(test_userfolders PROPERTIES CXX_STANDARD 17)
+target_link_libraries(test_userfolders PRIVATE test_harness wwlib wwdebug)
+add_test(NAME test_userfolders COMMAND test_userfolders)
+
+# EarlyCommandLine.h off Windows: the options read before the parser exists, from the process's own
+# argv, before main and after (C2).  The arguments are the test's input; see the test file.
+add_executable(test_early_command_line ${TESTS}/test_early_command_line.cpp ${TESTS}/gcc_eager_vtable_stubs.cpp)
+target_include_directories(test_early_command_line PRIVATE $<TARGET_PROPERTY:gameengine,INCLUDE_DIRECTORIES>)
+target_compile_definitions(test_early_command_line PRIVATE $<TARGET_PROPERTY:gameengine,COMPILE_DEFINITIONS>
+  ZH_EAGER_VTABLE_STUB_STRINGS)	# GCC's eager vtables; see Tests/gcc_eager_vtable_stubs.cpp
+set_target_properties(test_early_command_line PROPERTIES CXX_STANDARD 17)
+target_link_libraries(test_early_command_line PRIVATE test_harness wwlib wwdebug)
+# test_harness takes the first argument as its name filter; the options follow it.
+add_test(NAME test_early_command_line COMMAND test_early_command_line early_command_line
+  -logPrefix pre -headless -root "/tmp/zh_ä" -jobthreads 3 -last)
+
+# C5: the crash handler from the real CrashHandlerPosix.cpp, in a child process per way of crashing;
+# the report, the exit signal, and two armed controls.  See the test file.
+add_executable(test_crash_reporting ${TESTS}/test_crash_reporting.cpp ${GE}/Source/Common/System/CrashHandlerPosix.cpp
+  ${TESTS}/gcc_eager_vtable_stubs.cpp)
+target_include_directories(test_crash_reporting PRIVATE $<TARGET_PROPERTY:gameengine,INCLUDE_DIRECTORIES>)
+target_compile_definitions(test_crash_reporting PRIVATE $<TARGET_PROPERTY:gameengine,COMPILE_DEFINITIONS>
+  ZH_EAGER_VTABLE_STUB_STRINGS)	# GCC's eager vtables; see Tests/gcc_eager_vtable_stubs.cpp
+set_target_properties(test_crash_reporting PROPERTIES CXX_STANDARD 17)
+target_link_libraries(test_crash_reporting PRIVATE wwlib wwdebug)
+add_test(NAME test_crash_reporting COMMAND test_crash_reporting)
+# It crashes on purpose (a null write, an abort, raised SIGFPE and SIGBUS) and checks the crash handler's report.  Under
+# ZH_SANITIZE the sanitizer's own SEGV handler reports and exits first, which proves nothing about ours.
+if(ZH_SANITIZE)
+  set_tests_properties(test_crash_reporting PROPERTIES DISABLED TRUE)
+endif()
+
+# The BIG archive reader on POSIX, against the real game data under rule 9 (C1 (f)): every path's
+# owning archive against an independent reading of the mount order, and the bytes of a sample against
+# an independent parser.  Built from the real sources, as test_posixlocalfilesystem is.  Needs
+# ZH_GAME_DATA; without it the test is Skipped (77).
+add_executable(test_bigfilesystem ${TESTS}/test_bigfilesystem.cpp ${TESTS}/test_bigfilesystem_stubs.cpp
+  ${ZH_POSIXLFS_SOURCES_NO_MAIN}
+  ${GE}/Source/Common/System/ArchiveFileSystem.cpp ${GE}/Source/Common/System/ArchiveFile.cpp
+  ${GE}/Source/Common/System/StreamingArchiveFile.cpp
+  ${CMAKE_CURRENT_SOURCE_DIR}/GameEngineDevice/Source/Win32Device/Common/Win32BIGFile.cpp
+  ${CMAKE_CURRENT_SOURCE_DIR}/GameEngineDevice/Source/Win32Device/Common/Win32BIGFileSystem.cpp)
+target_include_directories(test_bigfilesystem PRIVATE
+  $<TARGET_PROPERTY:gameengine,INCLUDE_DIRECTORIES> ${CMAKE_CURRENT_SOURCE_DIR}/GameEngineDevice/Include)
+target_compile_definitions(test_bigfilesystem PRIVATE $<TARGET_PROPERTY:gameengine,COMPILE_DEFINITIONS>
+  ZH_EAGER_VTABLE_STUB_NO_POOL)
+set_target_properties(test_bigfilesystem PROPERTIES CXX_STANDARD 17)
+target_link_libraries(test_bigfilesystem PRIVATE test_harness wwlib wwdebug)
+add_test(NAME test_bigfilesystem COMMAND test_bigfilesystem)
+set_tests_properties(test_bigfilesystem PROPERTIES SKIP_RETURN_CODE 77)
+if(ZH_GAME_DATA)
+  set_tests_properties(test_bigfilesystem PROPERTIES ENVIRONMENT "ZH_DATA_DIR=${ZH_GAME_DATA}")
+endif()
+
+# The POSIX half of the Wine listing oracle (Tests/fs_oracle.cpp; its Windows half is built with
+# mingw-w64 and run under Wine, as C1 did).
+add_executable(fs_oracle ${TESTS}/fs_oracle.cpp)
+target_include_directories(fs_oracle PRIVATE ${WW}/WWLib)
+target_link_libraries(fs_oracle PRIVATE wwlib wwdebug)
+
+# The POSIX twin of test_ffshadercompile and test_ffvertexcompile: every generated program under the
+# SDL3 GPU target through glslang, spirv-val, SPIRV-Cross and, on macOS, the Metal driver (D3).
+# spirv-val is a tool on the machine, not something this build makes; without one the test prints
+# SKIPPED for that step and says how many it did not check.
+find_program(ZH_SPIRV_VAL spirv-val)
+add_lib_test(test_shader_sdl ffvertex engineshader sdl3shadercompile)
+if(ZH_SPIRV_VAL)
+  set_tests_properties(test_shader_sdl PROPERTIES ENVIRONMENT "ZH_SPIRV_VAL=${ZH_SPIRV_VAL}")
+endif()
+
+# D6a: the glyph rasteriser against the font files' own hdmx, VDMX and gasp, read by the test's own
+# parser, plus a regression golden keyed to the files' versions.  macOS's fonts; Linux later.
+add_lib_test(test_glyph_rasteriser glyphrasteriser)
+# D6b: FontCharsClass, the game's own, drawing with FreeType off Windows: GDI's arithmetic around the
+# rasteriser, through the class's public face.
+add_lib_test(test_fontchars ww3d2 glyphrasteriser wwsaveload wwlib wwmath wwdebug)
+
+# The golden dump behind D3's byte-identical proof: every program in Tests/shader_cases.h, every
+# target, one file each.  A tool, not a test: two runs are compared with diff -r.
+add_executable(ffshader_dump ${TESTS}/ffshader_dump.cpp)
+target_include_directories(ffshader_dump PRIVATE ${TESTS})
+target_link_libraries(ffshader_dump PRIVATE ffvertex engineshader)
+
+# A3b: FFReference, D3D9's fixed-function pipeline in double precision from Microsoft's documentation
+# alone - the oracle A3's harness compares the GPU's fixed-function draws against.  Independent of
+# ffshader/ffvertex by construction: it shares no code or headers with them (see ffreference.h).
+add_library(ffreference STATIC ${TESTS}/ffreference/ffreference.cpp ${TESTS}/ffreference/ffprogram.cpp
+  ${TESTS}/ffreference/ffcapture.cpp)
+target_include_directories(ffreference PUBLIC ${TESTS})
+add_lib_test(test_ffreference ffreference)
+add_lib_test(test_ffprogram ffreference)
+# its assembler test reads the water's ps.1.1 text from the game's own source, so it cannot drift
+target_compile_definitions(test_ffprogram PRIVATE ZH_CODE_DIR="${CMAKE_CURRENT_SOURCE_DIR}")
+# The engine's own D3D8 declarations in capture v3 against the device's D3D9 elements.  A tool, not a
+# test: captures are made on demand (ZH_GPU_CAPTURE) and never committed.  ffdecl_captures <dir>...
+add_executable(ffdecl_captures ${TESTS}/ffreference/ffdecl_captures.cpp)
+target_link_libraries(ffdecl_captures PRIVATE ffreference)
+# L2's oracle side: FFReference's own replay of a capture set, from ffcapture.h's reader (written from
+# the format's description, not from the device or its harness), judged against the GPU's pixels.  A tool,
+# not a test, for the same reason.  ffref_judge <dir> [--gpu <dump dir>] [--only draw_NNNNN]
+add_executable(ffref_judge ${TESTS}/ffreference/ffref_judge.cpp)
+target_link_libraries(ffref_judge PRIVATE ffreference)
+if(ZH_GAME_DATA)
+  set_tests_properties(test_ffprogram PROPERTIES ENVIRONMENT "ZH_DATA_DIR=${ZH_GAME_DATA}")
+endif()
+# A3e: the programmable stages' token values against MinGW-w64's d3d8types.h and d3d9types.h (a second
+# source for the numbers the reference pages leave out).  Skipped without x86_64-w64-mingw32-g++.
+if(ZH_PLATFORM_POSIX)		# a bash script, and the MinGW cross-compiler it drives
+  add_test(NAME ffprogram_values_check COMMAND ${CMAKE_CURRENT_SOURCE_DIR}/Tools/ffprogram-values-check.sh)
+  set_tests_properties(ffprogram_values_check PROPERTIES SKIP_RETURN_CODE 77)
+endif()
+
+# V1's check: every movie of the install through the Bink API, against its header and a golden
+# middle frame, and one movie's sound through C4's mix on the null backend.  Needs ZH_GAME_DATA.
+add_lib_test(test_binkvideo binkvideo milesaudio)
+target_include_directories(test_binkvideo PRIVATE ${WW}/Miles6/include ${TESTS})
+set_tests_properties(test_binkvideo PROPERTIES SKIP_RETURN_CODE 77 TIMEOUT 900)
+if(ZH_GAME_DATA)
+  set_tests_properties(test_binkvideo PROPERTIES ENVIRONMENT "ZH_AUDIO_BACKEND=null;ZH_DATA_DIR=${ZH_GAME_DATA}")
+else()
+  set_tests_properties(test_binkvideo PROPERTIES ENVIRONMENT "ZH_AUDIO_BACKEND=null")
+endif()
+endif()  # ZH_PLATFORM_POSIX - shader generator checks
+
+# Tools/bigfile.py reads and writes the game's BIG archives (that is how the shipped INIs
+# come out for editing).  Its selfcheck round-trips synthetic files, so it needs no game
+# data - but it does need an interpreter, so it is only registered when one is present.
+find_package(Python3 COMPONENTS Interpreter QUIET)
+if(Python3_Interpreter_FOUND)
+  # Every #include in the POSIX build must name its file in the file's own case.  Windows and a
+  # default macOS volume fold case and Linux does not, so a miscased include builds on the first two
+  # and is a missing header on the third; the first Linux build found 298.  This catches them on a
+  # Mac, from compile_commands.json, without Linux.  POSIX only: that is where the file is exported.
+  # Nothing the POSIX build compiles may carry text as wchar_t - four bytes here, two on Windows -
+  # and no literal anywhere in the engine may hold a raw non-ASCII byte, which MSVC and clang read as
+  # different characters.  WideChar is char16_t (B1); this finds what the compiler cannot, such as an
+  # L'x' that converts silently.  Exceptions, each with its reason, in Tools/widechar_check_allow.txt.
+  if(ZH_PLATFORM_POSIX)
+    add_test(NAME widechar_check
+             COMMAND ${Python3_EXECUTABLE} ${CMAKE_CURRENT_SOURCE_DIR}/Tools/widechar_check.py
+                     ${CMAKE_BINARY_DIR}/compile_commands.json ${CMAKE_CURRENT_SOURCE_DIR})
+  endif()
+  if(ZH_PLATFORM_POSIX)
+    add_test(NAME include_case_check
+             COMMAND ${Python3_EXECUTABLE} ${CMAKE_CURRENT_SOURCE_DIR}/Tools/include_case_check.py
+                     ${CMAKE_BINARY_DIR}/compile_commands.json ${CMAKE_CURRENT_SOURCE_DIR})
+    # Nothing may define _UNIX: not a vendored header (GameSpy's did, until vendor.sh renamed it),
+    # not an engine header, not a compile flag.  Scans the vendored sources too, which git and this
+    # machine's grep both skip, and plants a definition first to prove it can see one.
+    add_test(NAME unix_define_check
+             COMMAND ${Python3_EXECUTABLE} ${CMAKE_CURRENT_SOURCE_DIR}/Tools/unix_define_check.py
+                     ${CMAKE_BINARY_DIR}/compile_commands.json ${CMAKE_CURRENT_SOURCE_DIR})
+  endif()
+  add_test(NAME bigfile_selfcheck
+           COMMAND ${Python3_EXECUTABLE} ${CMAKE_CURRENT_SOURCE_DIR}/Tools/bigfile.py selfcheck)
+  # Tools/vfx_tune.py rewrites those INIs in place; its selfcheck runs both rule sets over a
+  # synthetic one and checks the block parser did not eat an End or duplicate a key.
+  add_test(NAME vfx_tune_selfcheck
+           COMMAND ${Python3_EXECUTABLE} ${CMAKE_CURRENT_SOURCE_DIR}/Tools/vfx_tune.py selfcheck)
+  # Tools/order_cameos.py paints the command bar's order key cameos: seven whole pictures in the
+  # places the mapped images name, told apart by colour, the same every run.
+  add_test(NAME order_cameos_selfcheck
+           COMMAND ${Python3_EXECUTABLE} ${CMAKE_CURRENT_SOURCE_DIR}/Tools/run_with_modules.py numpy,PIL
+                   ${CMAKE_CURRENT_SOURCE_DIR}/Tools/order_cameos.py selfcheck)
+  # numpy and Pillow are not on every machine (a Mac's system Python has neither): without them the
+  # test is skipped and says which is missing, instead of failing on an ImportError
+  set_tests_properties(order_cameos_selfcheck PROPERTIES SKIP_RETURN_CODE 77)
+  # The options screen is three tracked files that have to agree: TheOptionCatalog names a widget,
+  # Data/Window/Menus/OptionsMenu.wnd has to carry it, and Data/Patch.str has to carry its label,
+  # its tooltip and every combo box entry.  Nothing at build time notices a typo in any of them -
+  # the control is just never filled in, or the screen draws the key name - so it is checked here.
+  add_test(NAME optionsmenu_selfcheck
+           COMMAND ${Python3_EXECUTABLE}
+                   ${CMAKE_CURRENT_SOURCE_DIR}/Tools/optionsmenu_layout.py selfcheck)
+  # The peace time combo box is the same three-file agreement, in the two network lobby layouts:
+  # the menu code names ComboBoxPeaceTime, the layouts have to carry it, and Patch.str has to carry
+  # the entry captions, the tooltip, the corner countdown and the announcements.  A missing control
+  # is silent - the menu null checks it and the option just never appears - so it is checked here.
+  add_test(NAME peacetime_selfcheck
+           COMMAND ${Python3_EXECUTABLE}
+                   ${CMAKE_CURRENT_SOURCE_DIR}/Tools/peacetime_layout.py selfcheck)
+
+  # The lobby settings tab moves the host's settings onto a page of their own in all three lobbies,
+  # and takes EA's superweapon checkbox out.  Same three-file agreement, plus one more failure the
+  # null checks make silent: a control left behind on the old row would be drawn under the chat log.
+  add_test(NAME lobbysettings_selfcheck
+           COMMAND ${Python3_EXECUTABLE}
+                   ${CMAKE_CURRENT_SOURCE_DIR}/Tools/lobbysettings_layout.py selfcheck)
+
+  # The skirmish and LAN rooms are laid out on one grid by arithmetic, and the mistake arithmetic
+  # makes is silent: a control drawn over its neighbour, or a button a few pixels off the edge the
+  # rest of its column stands on.  Both are checked here, with every window the menu code names.
+  add_test(NAME lobbyroom_selfcheck
+           COMMAND ${Python3_EXECUTABLE}
+                   ${CMAKE_CURRENT_SOURCE_DIR}/Tools/lobbyroom_layout.py selfcheck)
+
+  # A translation is a .str of thousands of lines, and one printf directive lost or reordered in any
+  # of them reads the wrong argument the moment that line is formatted.  The check parses the tracked
+  # Turkish and German masters the way GameText.cpp does, and against Run/EnglishZH.big when it is
+  # there.
+  add_test(NAME gametext_selfcheck
+           COMMAND ${Python3_EXECUTABLE}
+                   ${CMAKE_CURRENT_SOURCE_DIR}/Tools/gametext.py selfcheck)
+endif()
+
+# The x86_64/arm64 differential harness.  Rosetta 2 runs an x86_64 binary on an Apple Silicon Mac
+# and clang cross-compiles to it, so one machine can build the same source for both architectures
+# and compare what they compute.  That recovers the architecture half of the determinism question
+# without waiting for a Windows machine - and only that half.  It is clang on both sides, so it
+# proves nothing about MSVC's codegen, its optimiser or its 32-bit long; Tests/arch_diff/
+# run_arch_diff.sh says so at length and should be read before anyone calls a green run here
+# "determinism verified".
+#
+# It skips rather than fails where the cross toolchain or Rosetta is absent, because it is a
+# capability of a developer's machine and not a requirement of the build.  ctest reads 77 as a skip.
+# Both oracles below are shell scripts driving a cross toolchain or Rosetta, so POSIX only: registered on
+# Windows they were "Process not started" failures in W2's first Windows ctest.
+if(ZH_PLATFORM_POSIX)
+  add_test(NAME arch_differential
+           COMMAND ${CMAKE_CURRENT_SOURCE_DIR}/Tests/arch_diff/run_arch_diff.sh
+                   ${CMAKE_CURRENT_SOURCE_DIR}
+                   ${CMAKE_CURRENT_BINARY_DIR}/arch_diff)
+  set_tests_properties(arch_differential PROPERTIES SKIP_RETURN_CODE 77)
+endif()
+
+# The D3DX oracle: runs Microsoft's own D3DXVec4Transform machine code under Rosetta and compares
+# d3dxportable.h against it.  It needs d3dx9_43.dll, which this repository does not carry, so it
+# reads ZH_D3DX9_X64 at run time (a Steam install's Jun2010_d3dx9_43_x64.cab, or the DLL) and skips
+# without it.  A green run matches two of the DLL's three bodies, not "Windows";
+# Tests/d3dx_oracle/run_d3dx_oracle.sh says why.
+if(ZH_PLATFORM_POSIX)
+  add_test(NAME d3dx_oracle
+           COMMAND ${CMAKE_CURRENT_SOURCE_DIR}/Tests/d3dx_oracle/run_d3dx_oracle.sh
+                   ${CMAKE_CURRENT_SOURCE_DIR}
+                   ${CMAKE_CURRENT_BINARY_DIR}/d3dx_oracle)
+  set_tests_properties(d3dx_oracle PROPERTIES SKIP_RETURN_CODE 77)
+endif()
+# A3e-asm: Microsoft's own D3DXAssembleShader (d3dx9_43 and the D3DCompiler_43 it loads, run as PE images
+# under Rosetta) against FFReference's ps.1.1 assembler on the water's four programs.  Opt-in like
+# d3dx_oracle: ZH_D3DX9_X64 at run time, skipped without it.  Tests/d3dx_assemble/run_assemble_oracle.sh.
+if(ZH_PLATFORM_POSIX)
+  add_test(NAME d3dx_assemble_oracle
+           COMMAND ${CMAKE_CURRENT_SOURCE_DIR}/Tests/d3dx_assemble/run_assemble_oracle.sh ${CMAKE_CURRENT_SOURCE_DIR})
+  set_tests_properties(d3dx_assemble_oracle PROPERTIES SKIP_RETURN_CODE 77)
+endif()
+
+if(RELEASE_DEBUG_LOGGING)
+  if(ZH_PLATFORM_WINDOWS)
+    # W3: not in a Debug build, which is EA's Debug build with its asserts (RELEASE_DEBUG_LOGGING turns
+    # DEBUG_CRASHING off, while the libraries WWVegas builds without it call DebugCrash).  Every target has
+    # _DEBUG there, so DEBUG_LOGGING's layouts still agree.  Release is as before.
+    foreach(name gameengine gameenginedevice generals)
+      target_compile_definitions(${name} PRIVATE $<$<NOT:$<CONFIG:Debug>>:RELEASE_DEBUG_LOGGING>)
+    endforeach()
+  else()
+    target_compile_definitions(gameengine PRIVATE RELEASE_DEBUG_LOGGING)
+    # The same off Windows, for the same reason: the device layer and the exe log, and a class laid out
+    # under DEBUG_LOGGING (ScriptEngine's timing fields) has to be laid out alike in every TU that uses it.
+    target_compile_definitions(posixdevice PRIVATE RELEASE_DEBUG_LOGGING)
+    target_compile_definitions(sdldevice PRIVATE RELEASE_DEBUG_LOGGING)
+    target_compile_definitions(sdlinput PRIVATE RELEASE_DEBUG_LOGGING)	# the SDL layer's input half
+    target_compile_definitions(w3ddevice PRIVATE RELEASE_DEBUG_LOGGING)	# gameenginedevice's W3D half
+    target_compile_definitions(generals PRIVATE RELEASE_DEBUG_LOGGING)
+  endif()
+endif()
+
+# THREADING-ROADMAP.md section 0: the measurement build.  EA's PerfGather call sites are all
+# over the frame already, but PerfTimer.h defines NO_PERF_TIMERS in *both* branches of its
+# #if, so PERF_TIMERS is off in every configuration and every USE_PERF_TIMER compiles to
+# nothing.  This switch turns them on without touching the shipping default: the timers read
+# the TSC on every scope entry and exit, which is not free, so OFF is the right default and
+# any perf claim has to say which build it came from.
+#
+# Only the three targets that include PerfTimer.h get the define.  It must not go on globally:
+# WWVegas' headers reach GameEngine's Debug.h, and a mismatched define across libraries is how
+# you get a link error at best and a silently different struct at worst.
+option(PERF_TIMERS "Compile EA's PerfGather scopes in (measurement build, not for shipping)" OFF)
+if(PERF_TIMERS)
+  target_compile_definitions(gameengine PRIVATE PERF_TIMERS)
+  # gameenginedevice and generals are only defined in a Windows configuration; see the platform
+  # split at the top of this file.
+  if(ZH_PLATFORM_WINDOWS)
+    target_compile_definitions(gameenginedevice PRIVATE PERF_TIMERS)
+    target_compile_definitions(generals PRIVATE PERF_TIMERS)
+    # A measurement build is not the build anyone plays, and its post-build step copies into the
+    # same Run/ directory the shipping one does.  Renaming the output keeps the two side by side -
+    # which is also the only way to measure one against the other without rebuilding in between
+    # (ai-batch.ps1 -Exe takes the name).
+    set_target_properties(generals PROPERTIES OUTPUT_NAME generals_perf)
+    message(STATUS "PERF_TIMERS ON - measurement build, timers cost real time; exe is generals_perf.exe")
+  else()
+    message(STATUS "PERF_TIMERS ON - measurement build, timers cost real time")
+  endif()
+endif()
+
+# Every test's own user data directory, in the build tree (the harness's guard, test_user_data_guard.cpp,
+# stops any test binary started without one).  Here, after the last add_test, so no test is missed and
+# no later set_tests_properties replaces it.  One folder per test so tests run in parallel do not share
+# an Options.ini or a Registry.ini.  Off Windows only: there the engine does not read the variable.
+#
+# And every test's own TMPDIR, in the build tree, made here at configure time (a deleted one comes back
+# with the next configure).  The system's is one folder for every process of the user: ctest -j4 on
+# 2026-09-26 lost a replay_check's work folder mid-run while other checkouts' harnesses, of several
+# versions, ran in the same folder.  A test's temporary trees are its own now, and whatever is left
+# behind stays in this build, where it can be seen.
+#
+# And every test on miniaudio's null backend (ZH_AUDIO_BACKEND=null, honoured where the one audio device
+# is opened, AIL_quick_startup in miles_miniaudio.cpp): automated runs make no sound
+# and show no window.  It reaches the games a test script starts too, so no ctest can make a sound, whatever
+# its switches.  The null device still mixes in real time, which is what the audio tests measure.
+if(ZH_PLATFORM_POSIX)
+  get_property(_zh_tests DIRECTORY PROPERTY TESTS)
+  foreach(_zh_test IN LISTS _zh_tests)
+    file(MAKE_DIRECTORY ${CMAKE_BINARY_DIR}/test-tmp/${_zh_test})
+    set_property(TEST ${_zh_test} APPEND PROPERTY ENVIRONMENT
+      "ZH_USER_DATA_DIR=${CMAKE_BINARY_DIR}/test-user-data/${_zh_test}"
+      "TMPDIR=${CMAKE_BINARY_DIR}/test-tmp/${_zh_test}"
+      "ZH_AUDIO_BACKEND=null")
+  endforeach()
+
+  # The tests that build a farm of the install (a folder of links into it) never run at the same time:
+  # one at a time is the belt to the braces above.  Readers that only open archives are not in it.
+  foreach(_zh_test replay_check replay_check_app net_check overlay_crc_check ini_crlf_check packaging_resolution_check root_readonly_check
+                   lod_first_run_check test_bigfilesystem test_install_textures test_milesaudiomanager
+                   data_gone_check locomotor_check)
+    if(TEST ${_zh_test})
+      set_property(TEST ${_zh_test} APPEND PROPERTY RESOURCE_LOCK zh_install)
+    endif()
+  endforeach()
+
+  # The SDL3 GPU selfchecks draw offscreen only.  On Apple they take SDL's dummy video driver and the
+  # windowless Metal hint (decision 10), so a host with no window server (a worker over ssh) runs them
+  # where it used to skip them, and every Mac takes the one path.  On Linux they take SDL's offscreen
+  # video driver, which gives Vulkan a VK_EXT_headless_surface and needs no patch: without a display they
+  # skipped ("SDL_Init: No available video device"), and with it all six pass on Mesa's ANV (L1b,
+  # measured on a Linux x86_64 host).  Not dummy there: it has no Vulkan_CreateSurface, so SDL finds no GPU backend.
+  if(APPLE)
+    foreach(_zh_test sdl_gpu_frame_selfcheck sdl_program_cache_selfcheck sdl_pipeline_state_selfcheck
+                     posix_gpu_draw_selfcheck ffref_gpu_selfcheck ffref_capture_selfcheck)
+      if(TEST ${_zh_test})
+        set_property(TEST ${_zh_test} APPEND PROPERTY ENVIRONMENT "SDL_VIDEO_DRIVER=dummy" "ZH_SDL_GPU_METAL_WINDOWLESS=1")
+      endif()
+    endforeach()
+  elseif(ZH_PLATFORM_LINUX)
+    foreach(_zh_test sdl_gpu_frame_selfcheck sdl_program_cache_selfcheck sdl_pipeline_state_selfcheck
+                     posix_gpu_draw_selfcheck ffref_gpu_selfcheck ffref_capture_selfcheck)
+      if(TEST ${_zh_test})
+        set_property(TEST ${_zh_test} APPEND PROPERTY ENVIRONMENT "SDL_VIDEO_DRIVER=offscreen")
+      endif()
+    endforeach()
+  endif()
+endif()
+
+# P2: on macOS our own code may not call an API newer than the deployment target without guarding it
+# (@available / __builtin_available): that is a build error here, not a crash on a player's older Mac.
+# Every target this file defines - the game, the port's libraries, the tests - but not the vendored
+# projects add_subdirectory brings in (SDL3, freetype, glslang, SPIRV-Cross, litehtml, GameSpy), which
+# guard their own calls and are not ours to fail.  Clang's unguarded-availability-new covers every API
+# introduced since macOS 10.13, so it reaches everything above a 13.0 target.
+if(APPLE)
+  get_property(_zh_targets DIRECTORY PROPERTY BUILDSYSTEM_TARGETS)
+  foreach(_zh_target IN LISTS _zh_targets)
+    get_target_property(_zh_type ${_zh_target} TYPE)
+    if(_zh_type MATCHES "^(STATIC_LIBRARY|SHARED_LIBRARY|MODULE_LIBRARY|OBJECT_LIBRARY|EXECUTABLE)$")
+      target_compile_options(${_zh_target} PRIVATE
+        $<$<COMPILE_LANGUAGE:C,CXX>:-Werror=unguarded-availability-new>)
+    endif()
+  endforeach()
+endif()
+
+# Say out loud which tests this configuration does not run.  A test that is
+# absent from `ctest` looks identical to one that passed, and on a port where
+# half the tree does not compile yet that distinction is the whole point.
+get_property(_zh_deferred GLOBAL PROPERTY ZH_DEFERRED_TESTS)
+if(_zh_deferred)
+  list(LENGTH _zh_deferred _zh_deferred_count)
+  string(REPLACE ";" ", " _zh_deferred_text "${_zh_deferred}")
+  message(STATUS "ctest: ${_zh_deferred_count} test(s) registered DISABLED on this platform "
+                 "- ${_zh_deferred_text}")
+  message(STATUS "ctest: they are built EXCLUDE_FROM_ALL and will not link until their task lands")
+endif()
