@@ -1457,9 +1457,16 @@ if(ZH_PLATFORM_POSIX)
   add_library(posixd3d9 STATIC ${POSIXD3D9_SOURCES})
   set_target_properties(posixd3d9 PROPERTIES CXX_STANDARD 17)
   target_include_directories(posixd3d9 PUBLIC ${ZH_POSIX_D3D9_INCLUDE})
+  if(ZH_PLATFORM_ANDROID)
+    # GlesSdlProgramCache uses SPIRV-Cross's C API directly to translate the existing
+    # HLSL -> SPIR-V output into GLSL ES 3.00. Keep the dependency explicit on the
+    # backend target so both its headers and static-library symbols are available.
+    target_include_directories(posixd3d9 PRIVATE ${LIBSRC}/SPIRV-Cross)
+  endif()
   # Desktop POSIX retains SDL_GPU; Android uses the GLES backend above.
   target_link_libraries(posixd3d9 PRIVATE ${ZH_SDL3_TARGET} sdl3shadercompile engineshader ffshader ffvertex)
   if(ZH_PLATFORM_ANDROID)
+    target_link_libraries(posixd3d9 PRIVATE spirv-cross-c)
     target_compile_definitions(posixd3d9 PRIVATE ZH_ANDROID_GLES=1)
     target_link_libraries(posixd3d9 PRIVATE GLESv3 GLESv2 log android)
   endif()
