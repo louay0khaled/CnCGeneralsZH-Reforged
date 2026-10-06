@@ -44,6 +44,12 @@ endif()
 
 message(STATUS "ZH platform: system=${CMAKE_SYSTEM_NAME} posix=${ZH_PLATFORM_POSIX} android=${ZH_PLATFORM_ANDROID} ndk=${CMAKE_ANDROID_NDK}")
 
+# Android uses LLD from the NDK. Do not hide later link failures behind the default
+# error limit: the CI workflow intentionally collects every linker diagnostic in one run.
+if(ZH_PLATFORM_ANDROID)
+  add_link_options(-Wl,--error-limit=0)
+endif()
+
 # The other half of the split.  A target that only Windows can build is gated out below; a target
 # whose sources do not compile under clang *yet* is a different thing, and this is it.  Those stay
 # defined on macOS, so that tasks B1-B6 have something to drive with --target and see real errors
@@ -1579,21 +1585,45 @@ if(ZH_PLATFORM_POSIX)
   set(FFMPEG_POSIX_LIBS ${FFMPEG_POSIX}/lib/libavformat.a ${FFMPEG_POSIX}/lib/libavcodec.a
     ${FFMPEG_POSIX}/lib/libswscale.a ${FFMPEG_POSIX}/lib/libswresample.a ${FFMPEG_POSIX}/lib/libavutil.a)
   set(FFMPEG_POSIX_CFLAGS "")
+  set(FFMPEG_POSIX_TARGET_OS "")
+  set(FFMPEG_POSIX_ARCH "")
+  set(FFMPEG_POSIX_SYSROOT "")
   if(APPLE AND CMAKE_OSX_DEPLOYMENT_TARGET)
     set(FFMPEG_POSIX_CFLAGS "-mmacosx-version-min=${CMAKE_OSX_DEPLOYMENT_TARGET}")
+  elseif(CMAKE_SYSTEM_NAME STREQUAL "Android")
+    # FFmpeg configure runs on the x86_64 GitHub runner, so Android must pass both the
+    # target architecture/OS and the NDK target/sysroot explicitly. Without this it
+    # silently builds host x86_64 archives and the final arm64 link rejects every object.
+    set(FFMPEG_POSIX_TARGET_OS android)
+    if(ANDROID_ABI STREQUAL "arm64-v8a")
+      set(FFMPEG_POSIX_ARCH aarch64)
+      set(FFMPEG_ANDROID_TRIPLE "aarch64-none-linux-android${CMAKE_SYSTEM_VERSION}")
+    elseif(ANDROID_ABI STREQUAL "armeabi-v7a")
+      set(FFMPEG_POSIX_ARCH arm)
+      set(FFMPEG_ANDROID_TRIPLE "armv7-none-linux-androideabi${CMAKE_SYSTEM_VERSION}")
+    elseif(ANDROID_ABI STREQUAL "x86_64")
+      set(FFMPEG_POSIX_ARCH x86_64)
+      set(FFMPEG_ANDROID_TRIPLE "x86_64-none-linux-android${CMAKE_SYSTEM_VERSION}")
+    elseif(ANDROID_ABI STREQUAL "x86")
+      set(FFMPEG_POSIX_ARCH x86)
+      set(FFMPEG_ANDROID_TRIPLE "i686-none-linux-android${CMAKE_SYSTEM_VERSION}")
+    else()
+      message(FATAL_ERROR "Unsupported Android ABI for FFmpeg: ${ANDROID_ABI}")
+    endif()
+    set(FFMPEG_POSIX_SYSROOT "${CMAKE_SYSROOT}")
+    if(CMAKE_C_COMPILER_TARGET)
+      set(FFMPEG_POSIX_CFLAGS "--target=${CMAKE_C_COMPILER_TARGET}")
+    else()
+      set(FFMPEG_POSIX_CFLAGS "--target=${FFMPEG_ANDROID_TRIPLE}")
+    endif()
+    if(CMAKE_SYSROOT)
+      string(APPEND FFMPEG_POSIX_CFLAGS " --sysroot=${CMAKE_SYSROOT}")
+    endif()
   endif()
-  # The SDK CMake gives our own targets.  Only /usr/bin/cc, the xcrun shim, finds one by itself; CMake may
-  # choose the toolchain's own cc (/Library/Developer/CommandLineTools/usr/bin/cc, as on one build Mac here),
-  # and FFmpeg's configure then cannot link its test program ("library 'System' not found") nor compile its
-  # host tools ("ctype.h not found").  SDKROOT reaches every compiler call configure makes - target and
-  # host alike - where an -isysroot flag would reach only the target's (and -arch must not reach the host).
   set(FFMPEG_POSIX_ENV "")
   if(APPLE AND CMAKE_OSX_SYSROOT)
     set(FFMPEG_POSIX_ENV "SDKROOT=${CMAKE_OSX_SYSROOT}")
   endif()
-  # FFmpeg's own configure picks the host's architecture, so a build for another one (x86_64 on Apple
-  # Silicon, run under Rosetta: E1's architecture axis) names it.  One at a time: configure builds one.
-  set(FFMPEG_POSIX_ARCH "")
   if(APPLE AND CMAKE_OSX_ARCHITECTURES)
     list(LENGTH CMAKE_OSX_ARCHITECTURES FFMPEG_ARCH_COUNT)
     if(NOT FFMPEG_ARCH_COUNT EQUAL 1)
@@ -1611,7 +1641,7 @@ if(ZH_PLATFORM_POSIX)
     COMMAND ${CMAKE_COMMAND} -E env ${FFMPEG_POSIX_ENV}
             ${CMAKE_CURRENT_SOURCE_DIR}/Tools/ffmpeg-build-posix.sh ${FFMPEG_TARBALL}
             ${CMAKE_CURRENT_BINARY_DIR}/ffmpeg-work ${FFMPEG_POSIX} ${CMAKE_C_COMPILER} "${FFMPEG_POSIX_CFLAGS}"
-            "${FFMPEG_POSIX_ARCH}"
+            "${FFMPEG_POSIX_ARCH}" "${FFMPEG_POSIX_TARGET_OS}" "${FFMPEG_POSIX_SYSROOT}"
     DEPENDS ${FFMPEG_TARBALL} ${CMAKE_CURRENT_SOURCE_DIR}/Tools/ffmpeg-build-posix.sh
     COMMENT "Building FFmpeg 8.1.2's Bink decoders for the movies (V1)"
     VERBATIM)
