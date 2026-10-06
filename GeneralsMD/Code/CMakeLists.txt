@@ -47,6 +47,10 @@ message(STATUS "ZH platform: system=${CMAKE_SYSTEM_NAME} posix=${ZH_PLATFORM_POS
 # Android uses LLD from the NDK. Do not hide later link failures behind the default
 # error limit: the CI workflow intentionally collects every linker diagnostic in one run.
 if(ZH_PLATFORM_ANDROID)
+  # EA's Windows-era #pragma comment(lib, ...) is supported by Clang on ELF and becomes
+  # implicit linker dependencies. Android links through CMake target dependencies instead,
+  # so do not import stale MSVC library names such as GameEngine/profile.lib into LLD.
+  add_compile_options(-fno-autolink)
   add_link_options(-Wl,--error-limit=0)
 endif()
 
