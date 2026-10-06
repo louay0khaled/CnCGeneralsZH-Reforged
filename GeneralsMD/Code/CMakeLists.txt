@@ -878,6 +878,13 @@ set(GS_BUILD_TESTS      OFF CACHE BOOL "" FORCE)
 set(GS_INCLUDE_VOICE    OFF CACHE BOOL "" FORCE)
 add_subdirectory(${LIBSRC}/GameSpy ${CMAKE_CURRENT_BINARY_DIR}/gamespy)
 
+# Android links the GameSpy SDK into a shared JNI library.  The SDK is a third-party
+# CMake project and does not reliably inherit CMAKE_POSITION_INDEPENDENT_CODE across
+# its internal target definitions, so enforce PIC on the actual archive target.
+if(ZH_PLATFORM_ANDROID AND TARGET gamespy)
+  set_target_properties(gamespy PROPERTIES POSITION_INDEPENDENT_CODE ON)
+endif()
+
 # ---- litehtml -------------------------------------------------------------
 # The HTML and CSS layout engine behind the pages drawn over the battlefield (GameClient/
 # HtmlOverlay.cpp).  It lays a page out and calls back to draw each box and each run of text, so
