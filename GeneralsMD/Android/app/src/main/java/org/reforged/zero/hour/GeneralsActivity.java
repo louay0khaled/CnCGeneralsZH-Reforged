@@ -113,7 +113,7 @@ public class GeneralsActivity extends SDLActivity {
                 .setTitle("الوصول إلى ملفات اللعبة")
                 .setMessage(
                         "حتى تعمل اللعبة من مجلد تثبيتك الأصلي بدون نسخ الملفات إلى Android/data، "
-                                + "نحتاج إذن "إدارة جميع الملفات".\n\n"
+                                + "نحتاج إذن \"إدارة جميع الملفات\".\n\n"
                                 + "بعد السماح، ستختار مجلد Zero Hour من مدير الملفات، ثم سيفحص التطبيق "
                                 + "INIZH.big و Textures.big ويخبرك مباشرة بما هو ناقص.")
                 .setCancelable(false)
