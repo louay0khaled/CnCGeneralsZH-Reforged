@@ -12,6 +12,7 @@
 #include "GameClient/Drawable.h"
 #include "GameClient/GameClient.h"
 #include "GameClient/GameWindowManager.h"
+#include "GameClient/SelectionInfo.h"
 #include "GameClient/InGameUI.h"
 #include "GameClient/View.h"
 #include "GameLogic/Object.h"
