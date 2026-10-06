@@ -387,6 +387,23 @@ install_gamespy_unix_patch() {
   step "gamespy-gsi-unix.patch -> Libraries/Source/GameSpy"
 }
 
+# --- Android's bionic pthreads do not expose pthread_cancel, while the pinned GameSpy SDK's
+# Linux implementation calls it. Apply this only to Android vendor runs; desktop Linux keeps the
+# upstream pthread cancellation semantics unchanged.
+install_gamespy_android_patch() {
+  local destination="$libraries/Source/GameSpy"
+  local source="$destination/src/common/linux/gsthreadlinux.c"
+  local patch="$libraries/Source/gamespy-android-pthread-cancel.patch"
+  if [ "${ZH_ANDROID:-0}" != "1" ]; then return 0; fi
+  if grep -q 'Android.*bionic pthread' "$source" 2>/dev/null; then return 0; fi
+  GIT_CEILING_DIRECTORIES="$libraries/Source"     git -C "$destination" -c core.autocrlf=false apply "$patch" || true
+  if ! grep -q 'Android.*bionic pthread' "$source" 2>/dev/null; then
+    echo "[vendor] gamespy-android-pthread-cancel.patch did not apply to Libraries/Source/GameSpy" >&2
+    exit 1
+  fi
+  step "gamespy-android-pthread-cancel.patch -> Libraries/Source/GameSpy"
+}
+
 # --- FFmpeg. Not fetched by either script: Libraries/Source/FFmpeg/dist is committed, and it is a
 # Windows distribution - .lib import libraries and avcodec-62.dll and friends. A Mac build needs a
 # different FFmpeg entirely, and whether that is Homebrew, a vendored dylib or a static build is
@@ -772,6 +789,7 @@ report_directx
 install_gamespy
 install_gamespy_patch
 install_gamespy_unix_patch
+install_gamespy_android_patch
 install_litehtml
 install_litehtml_patch
 install_nanosvg
