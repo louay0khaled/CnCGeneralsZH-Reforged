@@ -472,7 +472,7 @@ unsigned int collectFrames( uintptr_t pc, uintptr_t fp, uintptr_t lr, uintptr_t 
 	(void)fp;
 	// Android's NDK does not provide the glibc execinfo backtrace() API used by the desktop Linux port.
 	// Keep the signal-safe crash report useful with the PC and link register captured from ucontext.
-	if (lr != 0 && count < MAX_FRAMES && frames[ count - 1 ] != lr)
+	if (lr != 0 && count < MAX_FRAMES && (count == 0 || frames[ count - 1 ] != lr))
 		frames[ count++ ] = lr;
 #else
 	(void)fp;
