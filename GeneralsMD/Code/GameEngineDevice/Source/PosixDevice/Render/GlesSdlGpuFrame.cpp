@@ -468,6 +468,8 @@ static GLenum GlesBlendOpLocal(uint8_t op)
     }
 }
 
+}
+
 bool SdlGpuFrame::Gles_Replay()
 {
     SdlGpuFrame *frame = this;
@@ -568,8 +570,6 @@ bool SdlGpuFrame::Gles_Replay()
     glBindFramebuffer(GL_FRAMEBUFFER, 0);
     glFlush();
     return glGetError() == GL_NO_ERROR;
-}
-
 }
 
 SdlGpuFrame::SdlGpuFrame() :
