@@ -24,6 +24,8 @@ jobs:
           ${ANDROID_HOME}/cmdline-tools/latest/bin/sdkmanager "platforms;android-35" "ndk;28.2.13676358"
 
       - name: Vendor dependencies
+        env:
+          ZH_ANDROID: "1"
         run: bash GeneralsMD/Code/Tools/vendor.sh
 
       - name: Configure Android arm64
