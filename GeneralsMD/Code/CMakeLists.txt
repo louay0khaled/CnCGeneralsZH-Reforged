@@ -1931,7 +1931,15 @@ if(ZH_PLATFORM_POSIX)
     target_link_libraries(sdldevice PRIVATE "-framework CoreGraphics")		# SdlDisplays' panel size
   endif()
 
-  add_executable(generals ${CMAKE_CURRENT_SOURCE_DIR}/Main/PosixMain.cpp)
+  if(ZH_PLATFORM_ANDROID)
+    # SDL3's Android entry point is SDL_main(), exported from a shared library loaded by SDLActivity.
+    # An Android executable is wrong here: the NDK CRT expects a native main(), but SDL intentionally
+    # provides no native main() on Android. Build the game as libmain.so so the Java side can invoke SDL_main.
+    add_library(generals SHARED ${CMAKE_CURRENT_SOURCE_DIR}/Main/PosixMain.cpp)
+    set_target_properties(generals PROPERTIES OUTPUT_NAME main)
+  else()
+    add_executable(generals ${CMAKE_CURRENT_SOURCE_DIR}/Main/PosixMain.cpp)
+  endif()
   target_include_directories(generals PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/Main ${GENERATED})
   set_target_properties(generals PROPERTIES CXX_STANDARD 17)
   target_link_libraries(generals PRIVATE sdldevice installroot)
