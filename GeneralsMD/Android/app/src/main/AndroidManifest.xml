@@ -9,6 +9,10 @@
 
     <uses-permission android:name="android.permission.INTERNET" />
     <uses-permission android:name="android.permission.VIBRATE" />
+    <!-- Direct access to a user-selected game folder on shared storage.
+         This is intentionally requested outside the game directory so the native engine
+         can read the original install in place without forcing a manual copy into Android/data. -->
+    <uses-permission android:name="android.permission.MANAGE_EXTERNAL_STORAGE" />
 
     <application
         android:label="@string/app_name"
