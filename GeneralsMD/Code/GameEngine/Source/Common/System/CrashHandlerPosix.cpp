@@ -73,8 +73,11 @@
 #if defined(__APPLE__)
 #include <mach-o/dyld.h>
 #include <sys/ucontext.h>
-#elif defined(__linux__)
+#elif defined(__linux__) && !defined(__ANDROID__)
 #include <execinfo.h>
+#include <link.h>
+#include <ucontext.h>
+#elif defined(__ANDROID__)
 #include <link.h>
 #include <ucontext.h>
 #else
@@ -465,6 +468,12 @@ unsigned int collectFrames( uintptr_t pc, uintptr_t fp, uintptr_t lr, uintptr_t 
 			break;					// the chain only climbs; anything else is not a frame record
 		frame = next;
 	}
+#elif defined(__ANDROID__)
+	(void)fp;
+	// Android's NDK does not provide the glibc execinfo backtrace() API used by the desktop Linux port.
+	// Keep the signal-safe crash report useful with the PC and link register captured from ucontext.
+	if (lr != 0 && count < MAX_FRAMES && frames[ count - 1 ] != lr)
+		frames[ count++ ] = lr;
 #else
 	(void)fp;
 	(void)lr;
@@ -715,7 +724,7 @@ void installCrashHandlers( void )
 		// backtrace()'s unwinder, whose first call allocates.
 		Dl_info info;
 		dladdr( (const void *)&installCrashHandlers, &info );
-#if defined(__linux__)
+#if defined(__linux__) && !defined(__ANDROID__)
 		void *frames[ 4 ];
 		backtrace( frames, 4 );
 #endif
