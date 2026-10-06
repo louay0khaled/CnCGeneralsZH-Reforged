@@ -38,11 +38,35 @@ jobs:
         continue-on-error: true
         shell: bash
         run: |
+          set +e
           set -o pipefail
+          rm -f build.log build-exit-code.txt
           cmake --build build-android --target posixd3d9 generals -- -j2 -k 0 2>&1 | tee build.log
           status=${PIPESTATUS[0]}
-          echo "exit_code=${status}" >> "${GITHUB_OUTPUT}"
-          exit "${status}"
+          printf '%s\n' "${status}" > build-exit-code.txt
+          echo "Build exit code: ${status}"
+          exit 0
+
+      - name: Collect build error summary
+        if: always()
+        shell: bash
+        run: |
+          {
+            echo "Android GLES build error summary"
+            echo "================================"
+            echo
+            if [ -f build-exit-code.txt ]; then
+              echo "Build exit code: $(cat build-exit-code.txt)"
+            else
+              echo "Build exit code: unknown"
+            fi
+            echo
+            echo "Error count:"
+            grep -Ec 'error:|FAILED:|undefined reference|incompatible with|linker command failed|ninja: build stopped' build.log 2>/dev/null || true
+            echo
+            echo "Relevant diagnostics:"
+            grep -E 'error:|FAILED:|undefined reference|incompatible with|linker command failed|ninja: build stopped' build.log 2>/dev/null || true
+          } > build-error-summary.txt
 
       - name: Upload full build log
         if: always()
@@ -50,6 +74,17 @@ jobs:
         with:
           name: android-gles-build-log
           path: build.log
+          if-no-files-found: warn
+          retention-days: 7
+
+      - name: Upload build error summary
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: android-gles-build-errors
+          path: |
+            build-error-summary.txt
+            build-exit-code.txt
           if-no-files-found: warn
           retention-days: 7
 
@@ -64,6 +99,16 @@ jobs:
           if-no-files-found: warn
           retention-days: 7
 
+      - name: Preserve build failure status
+        if: always()
+        shell: bash
+        run: |
+          status="$(cat build-exit-code.txt 2>/dev/null || printf '1')"
+          case "${status}" in
+            ''|*[!0-9]*) echo "Invalid build exit code: ${status}"; exit 1 ;;
+          esac
+          echo "Final build exit code: ${status}"
+          exit "${status}"
       - name: Preserve build failure status
         if: always()
         shell: bash
