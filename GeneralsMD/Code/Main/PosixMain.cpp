@@ -280,9 +280,10 @@ static bool chooseFolderFromScript( PosixInstallQuestion question, const std::st
 static Bool chooseInstallRoot( int argc, char *argv[], const std::vector<std::string> &overlays, char *out, size_t outSize )
 {
 #if defined(__ANDROID__)
-	// Android has no useful desktop folder chooser in the pre-engine bootstrap. Use the application's
-	// public external-files directory so the player can copy their own Zero Hour data there.
-	// Explicit -root remains available for development builds.
+	// Android's Java shell owns the folder picker and storage permission. It writes a small
+	// ready marker containing the user's real Zero Hour install path. The native engine waits
+	// here because the SAF UI is asynchronous; once the marker is valid, the normal POSIX
+	// install validator gets the exact same final say as desktop builds.
 	for (int i = 1; i + 1 < argc; ++i)
 	{
 		if (strcasecmp( argv[i], "-root" ) == 0)
@@ -300,33 +301,58 @@ static Bool chooseInstallRoot( int argc, char *argv[], const std::vector<std::st
 	if (external != NULL && external[0] != '\0')
 	{
 		const std::string base( external );
-		const std::string candidates[] = { base + "/game", base + "/Zero Hour", base };
-		for (size_t i = 0; i < sizeof( candidates ) / sizeof( candidates[0] ); ++i)
+		const std::string ready = base + "/.zh-game-root";
+		const std::string cancelled = base + "/.zh-game-root.cancelled";
+
+		for (int attempt = 0; attempt < 1200; ++attempt) // up to 5 minutes for the permission/picker UI
 		{
-			if (PosixCheckInstallFolder( candidates[i], overlays ) == INSTALL_OK)
+			if (access( cancelled.c_str(), F_OK ) == 0)
 			{
-				if (candidates[i].size() + 1 > outSize)
-					return FALSE;
-				strcpy( out, candidates[i].c_str() );
-				fprintf( stderr, "generals: Android game root %s\n", candidates[i].c_str() );
-				return TRUE;
+				fprintf( stderr, "generals: Android game-folder setup cancelled by the user\n" );
+				return FALSE;
 			}
+
+			FILE *fp = fopen( ready.c_str(), "r" );
+			if (fp != NULL)
+			{
+				char line[ PATH_MAX ];
+				if (fgets( line, sizeof( line ), fp ) != NULL)
+				{
+					size_t n = strlen( line );
+					while (n > 0 && (line[n - 1] == '\n' || line[n - 1] == '\r'))
+						line[--n] = '\0';
+					std::string selected( line );
+					if (!selected.empty() && PosixCheckInstallFolder( selected, overlays ) == INSTALL_OK)
+					{
+						if (selected.size() + 1 > outSize)
+						{
+							fclose( fp );
+							fprintf( stderr, "generals: Android game root path is too long\n" );
+							return FALSE;
+						}
+						fclose( fp );
+						strcpy( out, selected.c_str() );
+						fprintf( stderr, "generals: Android game root %s\n", out );
+						return TRUE;
+					}
+				}
+				fclose( fp );
+			}
+			SDL_Delay( 250 );
 		}
 	}
 
 	const char *where = external != NULL ? external : "(Android external-files directory unavailable)";
 	char problem[ 1400 ];
 	snprintf( problem, sizeof( problem ),
-		"Zero Hour Reforged could not find the game data.\\n\\n"
-		"Copy your own Generals Zero Hour files into:\\n%s\\n\\n"
-		"The folder must contain INIZH.big and the original Generals Textures.big "
-		"(normally inside ZH_Generals).\\n\\n"
-		"EA game data is not included with this application.",
-		where );
-	fprintf( stderr, "generals: %s\n", problem );
+		"Zero Hour Reforged could not finish game-folder setup.\n\n"
+		"Open the app again, grant file access, and choose the folder that contains INIZH.big "
+		"and the original Generals Textures.big (normally in ZH_Generals).\n\n"
+		"EA game data is not included with this application." );
+	fprintf( stderr, "generals: %s (state directory: %s)\n", problem, where );
 	SDL_ShowSimpleMessageBox( SDL_MESSAGEBOX_ERROR, "Zero Hour Reforged", problem, NULL );
 	return FALSE;
-#else
+#endif
 	PosixInstallRequest request;
 	Bool unattended = FALSE;
 	for (int i = 1; i < argc; ++i)
