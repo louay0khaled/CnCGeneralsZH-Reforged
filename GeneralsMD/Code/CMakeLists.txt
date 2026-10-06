@@ -878,11 +878,38 @@ set(GS_BUILD_TESTS      OFF CACHE BOOL "" FORCE)
 set(GS_INCLUDE_VOICE    OFF CACHE BOOL "" FORCE)
 add_subdirectory(${LIBSRC}/GameSpy ${CMAKE_CURRENT_BINARY_DIR}/gamespy)
 
-# Android links the GameSpy SDK into a shared JNI library.  The SDK is a third-party
-# CMake project and does not reliably inherit CMAKE_POSITION_INDEPENDENT_CODE across
-# its internal target definitions, so enforce PIC on the actual archive target.
-if(ZH_PLATFORM_ANDROID AND TARGET gamespy)
-  set_target_properties(gamespy PROPERTIES POSITION_INDEPENDENT_CODE ON)
+# Android links GameSpy through the shared JNI library (libmain.so).  GameSpy's top-level
+# target is only an aggregate archive: the real objects live in its 17 static component
+# libraries.  Setting PIC on the aggregate archive alone does not rebuild those component
+# objects as PIC, so AArch64 LLD rejects their absolute relocations at the final shared link.
+# Keep the fix at the CMake target level rather than adding -fPIC to a global linker command:
+# every object that can enter libmain.so is explicitly compiled as position-independent code.
+if(ZH_PLATFORM_ANDROID)
+  set(_zh_gamespy_pic_targets
+    gscommon
+    gschat
+    gsnatneg
+    gsqr
+    gsqr2
+    gscdkey
+    gshttp
+    gsgt2
+    gsgp
+    gsgstats
+    gspinger
+    gsserverbrowsing
+    gspeer
+    gspt
+    gssake
+    gswebservices
+    gssc
+    gamespy)
+  foreach(_zh_gamespy_target IN LISTS _zh_gamespy_pic_targets)
+    if(TARGET ${_zh_gamespy_target})
+      set_target_properties(${_zh_gamespy_target} PROPERTIES POSITION_INDEPENDENT_CODE ON)
+    endif()
+  endforeach()
+  unset(_zh_gamespy_pic_targets)
 endif()
 
 # ---- litehtml -------------------------------------------------------------
