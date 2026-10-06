@@ -109,13 +109,3 @@ jobs:
           esac
           echo "Final build exit code: ${status}"
           exit "${status}"
-      - name: Preserve build failure status
-        if: always()
-        shell: bash
-        run: |
-          status="${{ steps.build.outputs.exit_code }}"
-          if [ -z "${status}" ]; then
-            echo "Build step did not produce an exit code."
-            exit 1
-          fi
-          exit "${status}"
