@@ -32,10 +32,10 @@ public final class GeneralsActivity extends SDLActivity {
         StringWriter stack = new StringWriter();
         throwable.printStackTrace(new PrintWriter(stack));
         String body =
-                "Java crash in isolated Generals game process\\n" +
-                "Thread: " + thread.getName() + " (id " + thread.getId() + ")\\n" +
-                "Time: " + System.currentTimeMillis() + "\\n\\n" +
-                stack + "\\n";
+                "Java crash in isolated Generals game process\n" +
+                "Thread: " + thread.getName() + " (id " + thread.getId() + ")\n" +
+                "Time: " + System.currentTimeMillis() + "\n\n" +
+                stack + "\n";
 
         File report = new File(logs, "JavaCrashInfo.txt");
         try (FileOutputStream out = new FileOutputStream(report, false)) {
