@@ -72,6 +72,7 @@ static const char *const BASE_GAME_ARCHIVE = "Textures.big";
 // over.
 static const char *const BASE_GAME_DIRECTORIES[] = {
 	"ZH_Generals\\",
+	"z_generals\\",
 	"..\\Command & Conquer Generals\\",
 	"..\\Command & Conquer(tm) Generals\\",
 };
@@ -135,14 +136,14 @@ static void reportMissingBaseGame(void)
 	::MessageBox(NULL,
 		"Zero Hour shares most of its artwork, sound effects and music with Command & Conquer Generals, "
 		"and none of the base game's .big files could be found.\n\n"
-		"Install Generals, or copy its .big files into a folder named ZH_Generals next to generals.exe.",
+		"Install Generals. Steam/EA installations using the nested ZH_Generals or z_generals layout are detected automatically; no file copying is required.",
 		"Zero Hour Reforged",
 		MB_OK | MB_ICONWARNING | MB_TASKMODAL);
 #else
 	MessageBoxWrapper(
 		"Zero Hour shares most of its artwork, sound effects and music with Command & Conquer Generals, "
 		"and none of the base game's .big files could be found.\n\n"
-		"Install Generals, or copy its .big files into a folder named ZH_Generals beside the game.",
+		"Install Generals. Steam/EA installations using the nested ZH_Generals or z_generals layout are detected automatically; no file copying is required.",
 		"Zero Hour Reforged",
 		MSGBOX_OK | MSGBOX_ICONWARNING | MSGBOX_TASKMODAL);
 #endif
@@ -228,6 +229,12 @@ void Win32BIGFileSystem::init() {
       {
         installPath = "ZH_Generals/";
         fprintf(stderr, "INFO: Android detected standard Steam layout: %s\n", installPath.str());
+      }
+
+      if (installPath.isEmpty() && holdsBaseGameArchives("z_generals/"))
+      {
+        installPath = "z_generals/";
+        fprintf(stderr, "INFO: Android detected lowercase Steam base layout: %s\n", installPath.str());
       }
 
       if (installPath.isEmpty() && holdsBaseGameArchives("Generals/"))
