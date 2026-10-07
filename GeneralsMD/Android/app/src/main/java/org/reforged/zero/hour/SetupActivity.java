@@ -33,6 +33,7 @@ public final class SetupActivity extends Activity {
     // private app storage and refreshed atomically before native startup.
     private static final String REFORGED_DATA_VERSION = "2026-10-07-2";
     private static final String NATIVE_DIAGNOSTICS_SEEN = ".native-diagnostics-seen";
+    private static final String GAME_RUN_PENDING = ".game-run-pending";
     private boolean pickerOpen = false;
     private boolean permissionScreenOpen = false;
 
@@ -803,6 +804,24 @@ public final class SetupActivity extends Activity {
         return new File(getFilesDir(), NATIVE_DIAGNOSTICS_SEEN);
     }
 
+    private File gameRunPendingFile() {
+        return new File(getFilesDir(), GAME_RUN_PENDING);
+    }
+
+    private void prepareGameRunDiagnostics() {
+        File logs = nativeLogsDir();
+        if (!logs.isDirectory()) logs.mkdirs();
+        new File(logs, "ReleaseCrashInfo.txt").delete();
+        new File(logs, "ReleaseCrashInfoPrev.txt").delete();
+        new File(logs, "DebugLogFile.txt").delete();
+        new File(logs, "JavaCrashInfo.txt").delete();
+        try (FileOutputStream out = new FileOutputStream(gameRunPendingFile(), false)) {
+            out.write(Long.toString(System.currentTimeMillis()).getBytes(StandardCharsets.UTF_8));
+            out.flush();
+            out.getFD().sync();
+        } catch (Exception ignored) {}
+    }
+
     private long readDiagnosticsSeen() {
         File file = nativeDiagnosticsSeenFile();
         if (!file.isFile()) return 0L;
@@ -839,10 +858,21 @@ public final class SetupActivity extends Activity {
     private boolean showNativeDiagnosticsIfPresent() {
         File crash = nativeCrashFile();
         File debug = nativeDebugFile();
+        File javaCrash = new File(nativeLogsDir(), "JavaCrashInfo.txt");
         long crashTime = crash.isFile() ? crash.lastModified() : 0L;
         long debugTime = debug.isFile() ? debug.lastModified() : 0L;
-        long latest = Math.max(crashTime, debugTime);
-        if (latest <= 0L || latest <= readDiagnosticsSeen()) return false;
+        long javaCrashTime = javaCrash.isFile() ? javaCrash.lastModified() : 0L;
+        long latest = Math.max(crashTime, Math.max(debugTime, javaCrashTime));
+
+        File pendingFile = gameRunPendingFile();
+        if (!pendingFile.isFile()) return false;
+        long pending = 0L;
+        try {
+            pending = Long.parseLong(new String(
+                    java.nio.file.Files.readAllBytes(pendingFile.toPath()),
+                    StandardCharsets.UTF_8).trim());
+        } catch (Exception ignored) {}
+        if (pending <= 0L || latest <= pending || latest <= readDiagnosticsSeen()) return false;
 
         StringBuilder body = new StringBuilder();
         if (crashTime > 0L) {
@@ -854,9 +884,15 @@ public final class SetupActivity extends Activity {
             body.append("DEBUG LOG (tail)\n");
             body.append(readTail(debug, 5000));
         }
+        if (javaCrashTime > 0L) {
+            if (body.length() > 0) body.append("\n\n");
+            body.append("JAVA CRASH\n");
+            body.append(readTail(javaCrash, 7000));
+        }
 
         final String report = body.toString();
         markDiagnosticsSeen(latest);
+        pendingFile.delete();
 
         new AlertDialog.Builder(this)
                 .setTitle("تشخيص آخر تشغيل")
@@ -883,8 +919,10 @@ public final class SetupActivity extends Activity {
                     Toast.LENGTH_LONG).show();
             return;
         }
+        prepareGameRunDiagnostics();
         startActivity(new Intent(this, GeneralsActivity.class));
-        finish();
+        // Do not finish this Activity. GeneralsActivity runs in the isolated :game
+        // process, so this launcher remains alive underneath it after a native crash.
     }
 
     private void showError(String message) {

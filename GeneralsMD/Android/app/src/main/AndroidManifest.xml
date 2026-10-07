@@ -30,6 +30,7 @@
 
         <activity
             android:name=".GeneralsActivity"
+            android:process=":game"
             android:screenOrientation="landscape"
             android:configChanges="layoutDirection|locale|fontScale|orientation|screenLayout|screenSize|smallestScreenSize|keyboard|keyboardHidden|navigation|uiMode"
             android:exported="false" />
