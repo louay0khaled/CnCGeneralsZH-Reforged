@@ -924,7 +924,6 @@ void GameEngine::init( int argc, char *argv[] )
 
 
 		initStage = "TheLocalFileSystem";
-		initStage = "TheLocalFileSystem";
 		initSubsystem(TheLocalFileSystem, "TheLocalFileSystem", createLocalFileSystem(), NULL);
 
 		//Kris: Patch 1.01 - November 17, 2003
@@ -944,7 +943,6 @@ void GameEngine::init( int argc, char *argv[] )
 	#endif/////////////////////////////////////////////////////////////////////////////////////////////
 
 
-		initStage = "TheArchiveFileSystem";
 		initStage = "TheArchiveFileSystem";
 		initSubsystem(TheArchiveFileSystem, "TheArchiveFileSystem", createArchiveFileSystem(), NULL); // this MUST come after TheLocalFileSystem creation
 
@@ -994,7 +992,6 @@ void GameEngine::init( int argc, char *argv[] )
 			}
 		}
 
-		initStage = "TheWritableGlobalData";
 		initStage = "TheWritableGlobalData";
 		initSubsystem(TheWritableGlobalData, "TheWritableGlobalData", MSGNEW("GameEngineSubsystem") GlobalData(), &xferCRC, "Data\\INI\\Default\\GameData.ini", "Data\\INI\\GameData.ini");
 
@@ -1067,6 +1064,7 @@ void GameEngine::init( int argc, char *argv[] )
 		initStage = "TheScienceStore";
 		initSubsystem(TheScienceStore,"TheScienceStore", MSGNEW("GameEngineSubsystem") ScienceStore(), &xferCRC, "Data\\INI\\Default\\Science.ini", "Data\\INI\\Science.ini");
 		// New sciences only: a name EA already defined stops the load
+		initStage = "ScienceReforged.ini";
 		ini.load( AsciiString( "Data\\INI\\ScienceReforged.ini" ), INI_LOAD_MULTIFILE, &xferCRC );
 		initStage = "TheMultiplayerSettings";
 		initSubsystem(TheMultiplayerSettings,"TheMultiplayerSettings", MSGNEW("GameEngineSubsystem") MultiplayerSettings(), &xferCRC, "Data\\INI\\Default\\Multiplayer.ini", "Data\\INI\\Multiplayer.ini");
@@ -1142,6 +1140,7 @@ void GameEngine::init( int argc, char *argv[] )
 			 loose copy of FXList.ini because a loose copy shadows the whole 190K shipped file: it goes
 			 stale against every patch, it cannot be reviewed, and - since it lands in the INI CRC below -
 			 it silently refuses every multiplayer join from a machine that does not have the same one. */
+		initStage = "FXListReforged.ini";
 		ini.load( AsciiString( "Data\\INI\\FXListReforged.ini" ), INI_LOAD_OVERWRITE, &xferCRC );
 		initStage = "TheWeaponStore";
 		initSubsystem(TheWeaponStore,"TheWeaponStore", MSGNEW("GameEngineSubsystem") WeaponStore(), &xferCRC, NULL, "Data\\INI\\Weapon.ini");
@@ -1149,6 +1148,7 @@ void GameEngine::init( int argc, char *argv[] )
 		initSubsystem(TheObjectCreationListStore,"TheObjectCreationListStore", MSGNEW("GameEngineSubsystem") ObjectCreationListStore(), &xferCRC, "Data\\INI\\Default\\ObjectCreationList.ini", "Data\\INI\\ObjectCreationList.ini");
 		/* Lists EA left out or got wrong, before any object names one: a list parsed again is cleared
 			 and replaced whole, and a new name is simply added. */
+		initStage = "ObjectCreationListReforged.ini";
 		ini.load( AsciiString( "Data\\INI\\ObjectCreationListReforged.ini" ), INI_LOAD_OVERWRITE, &xferCRC );
 		initStage = "TheLocomotorStore";
 		initSubsystem(TheLocomotorStore,"TheLocomotorStore", MSGNEW("GameEngineSubsystem") LocomotorStore(), &xferCRC, NULL, "Data\\INI\\Locomotor.ini");
@@ -1156,6 +1156,7 @@ void GameEngine::init( int argc, char *argv[] )
 		initSubsystem(TheSpecialPowerStore,"TheSpecialPowerStore", MSGNEW("GameEngineSubsystem") SpecialPowerStore(), &xferCRC, "Data\\INI\\Default\\SpecialPower.ini", "Data\\INI\\SpecialPower.ini");
 		/* Powers edited in place (a scan Frenzy should not give) and the Demolitions General's own
 			 Rebel Ambush, before any object names one. */
+		initStage = "SpecialPowerReforged.ini";
 		ini.load( AsciiString( "Data\\INI\\SpecialPowerReforged.ini" ), INI_LOAD_MULTIFILE, &xferCRC );
 		initStage = "TheDamageFXStore";
 		initSubsystem(TheDamageFXStore,"TheDamageFXStore", MSGNEW("GameEngineSubsystem") DamageFXStore(), &xferCRC, NULL, "Data\\INI\\DamageFX.ini");
@@ -1180,9 +1181,11 @@ void GameEngine::init( int argc, char *argv[] )
 			 MULTIFILE edits a template in place and leaves every field the file does not name as EA
 			 wrote it, so the file holds the changes and nothing else; an Armor block still replaces
 			 that armor whole.  It is in the INI CRC like the files it edits. */
+		initStage = "BalanceReforged.ini";
 		ini.load( AsciiString( "Data\\INI\\BalanceReforged.ini" ), INI_LOAD_MULTIFILE, &xferCRC );
 		/* Mistakes in EA's data for the nine generals, patched the same way: a copy that missed the
 			 original's change, a wrong faction's sound, an icon naming an upgrade that does not exist. */
+		initStage = "FixesReforged.ini";
 		ini.load( AsciiString( "Data\\INI\\FixesReforged.ini" ), INI_LOAD_MULTIFILE, &xferCRC );
 
 	#ifdef DUMP_PERF_STATS///////////////////////////////////////////////////////////////////////////
@@ -1196,6 +1199,7 @@ void GameEngine::init( int argc, char *argv[] )
 		initStage = "TheUpgradeCenter";
 		initSubsystem(TheUpgradeCenter,"TheUpgradeCenter", MSGNEW("GameEngineSubsystem") UpgradeCenter, &xferCRC, "Data\\INI\\Default\\Upgrade.ini", "Data\\INI\\Upgrade.ini");
 		// An upgrade parsed again is edited in place, so this file names only what changes
+		initStage = "UpgradeReforged.ini";
 		ini.load( AsciiString( "Data\\INI\\UpgradeReforged.ini" ), INI_LOAD_MULTIFILE, &xferCRC );
 		initStage = "TheGameClient";
 		initSubsystem(TheGameClient,"TheGameClient", createGameClient(), NULL);
@@ -1458,21 +1462,24 @@ void GameEngine::init( int argc, char *argv[] )
 		else
 		{
 			AsciiString why;
-			why.format("INI exception during initialization at %s.", initStage);
+			why.format("INI exception during initialization at %s (%s).", initStage,
+			TheSubsystemInitDetail.isEmpty() ? "no subsystem detail" : TheSubsystemInitDetail.str());
 			RELEASE_CRASH((why.str()));
 		}
 	}
 	catch (const std::exception &e)
 	{
 		AsciiString why;
-		why.format("C++ exception during initialization at %s: %s", initStage, e.what());
+		why.format("C++ exception during initialization at %s (%s): %s", initStage,
+			TheSubsystemInitDetail.isEmpty() ? "no subsystem detail" : TheSubsystemInitDetail.str(), e.what());
 		DEBUG_LOG(("GameEngine::init - %s\n", why.str()));
 		RELEASE_CRASH((why.str()));
 	}
 	catch (...)
 	{
 		AsciiString why;
-		why.format("Uncaught exception during initialization at %s.", initStage);
+		why.format("Uncaught exception during initialization at %s (%s).", initStage,
+			TheSubsystemInitDetail.isEmpty() ? "no subsystem detail" : TheSubsystemInitDetail.str());
 		DEBUG_LOG(("GameEngine::init - %s\n", why.str()));
 		RELEASE_CRASH((why.str()));
 	}
