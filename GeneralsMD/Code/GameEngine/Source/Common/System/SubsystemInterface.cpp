@@ -125,6 +125,9 @@ void SubsystemInterface::DRAW(void)
 
 
 //-----------------------------------------------------------------------------
+AsciiString TheSubsystemInitDetail;
+
+//-----------------------------------------------------------------------------
 SubsystemInterfaceList::SubsystemInterfaceList()
 {
 }
@@ -162,16 +165,30 @@ void SubsystemInterfaceList::removeSubsystem(SubsystemInterface* sys)
 void SubsystemInterfaceList::initSubsystem(SubsystemInterface* sys, const char* path1, const char* path2, const char* dirpath, Xfer *pXfer, AsciiString name)
 {
 	sys->setName(name);
+	TheSubsystemInitDetail.format("%s: init()", name.str());
 	sys->init();
 
 	INI ini;
 	if (path1)
+	{
+		TheSubsystemInitDetail.format("%s: %s", name.str(), path1);
+		DEBUG_LOG(("Subsystem init: %s\n", TheSubsystemInitDetail.str()));
 		ini.load(path1, INI_LOAD_OVERWRITE, pXfer );
+	}
 	if (path2)
+	{
+		TheSubsystemInitDetail.format("%s: %s", name.str(), path2);
+		DEBUG_LOG(("Subsystem init: %s\n", TheSubsystemInitDetail.str()));
 		ini.load(path2, INI_LOAD_OVERWRITE, pXfer );
+	}
 	if (dirpath)
+	{
+		TheSubsystemInitDetail.format("%s: directory %s", name.str(), dirpath);
+		DEBUG_LOG(("Subsystem init: %s\n", TheSubsystemInitDetail.str()));
 		ini.loadDirectory(dirpath, TRUE, INI_LOAD_OVERWRITE, pXfer );
+	}
 
+	TheSubsystemInitDetail.format("%s: complete", name.str());
 	m_subsystems.push_back(sys);
 }
 
