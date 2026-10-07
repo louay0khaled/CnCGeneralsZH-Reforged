@@ -51,10 +51,12 @@
 #include "Common/EarlyCommandLine.h"
 #include <stdio.h>
 #include <stdlib.h>
+#include <vector>
 #include <string.h>
 #if !defined(_WIN32)
 #include <dirent.h>
 #include <strings.h>
+#include <sys/stat.h>
 #include <algorithm>
 #endif
 
