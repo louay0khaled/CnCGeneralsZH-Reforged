@@ -37,11 +37,26 @@ android {
             ]
             res.srcDirs = ["src/main/res"]
             // Reforged-owned data is part of the Android application, not the user's Steam install.
-            // It is extracted once to private app storage before the native engine starts and mounted
-            // as the normal POSIX overlay, leaving the original game files completely untouched.
-            assets.srcDirs = ["../../../Code/Data"]
+            // Generate an asset tree rooted at Data/ so SetupActivity can extract it verbatim to
+            // <app-internal>/ReforgedData/Data and the native POSIX overlay resolves Data\\... exactly
+            // like the desktop install. Do not rely on a sourceSets relative path alone: AGP can
+            // otherwise silently omit this out-of-tree directory from the final APK.
             jniLibs.srcDirs = ["libs"]
         }
+    }
+
+    def reforgedDataDir = file("../../../Code/Data")
+    def generatedReforgedAssetsDir = file("${buildDir}/generated/reforged-assets")
+
+    tasks.register("prepareReforgedAssets", Sync) {
+        from(reforgedDataDir)
+        into(new File(generatedReforgedAssetsDir, "Data"))
+    }
+
+    android.sourceSets.main.assets.srcDir(generatedReforgedAssetsDir)
+
+    tasks.named("preBuild") {
+        dependsOn(tasks.named("prepareReforgedAssets"))
     }
 
     if (!project.hasProperty("PREBUILT_NATIVE")) {
