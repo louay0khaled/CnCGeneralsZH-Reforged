@@ -346,8 +346,8 @@ static Bool chooseInstallRoot( int argc, char *argv[], const std::vector<std::st
 	char problem[ 1400 ];
 	snprintf( problem, sizeof( problem ),
 		"Zero Hour Reforged could not finish game-folder setup.\n\n"
-		"Open the app again, grant file access, and choose the folder that contains INIZH.big "
-		"and the original Generals Textures.big (normally in ZH_Generals).\n\n"
+		"Open the app again and choose the Zero Hour folder, the one containing INIZH.big. "
+		"The original Generals files such as Textures.big are loaded separately from Generals/ZH_Generals.\n\n"
 		"EA game data is not included with this application." );
 	fprintf( stderr, "generals: %s (state directory: %s)\n", problem, where );
 	SDL_ShowSimpleMessageBox( SDL_MESSAGEBOX_ERROR, "Zero Hour Reforged", problem, NULL );
@@ -539,6 +539,50 @@ int main( int argc, char *argv[] )
 			fprintf( stderr, "generals: cannot use '%s' as the install root: %s\n", root, strerror( errno ) );
 			return 1;
 		}
+
+#if defined(__ANDROID__)
+		// Zero Hour and the original Generals are two different asset roots.
+		// MYSOREZ passes the base-Generals directory to the native archive
+		// loader through CNC_GENERALS_PATH; mirror that contract here so a
+		// Steam/Deluxe ZH folder can keep Textures.big in ZH_Generals (or in
+		// the sibling Generals folder) without pretending it is a Zero Hour file.
+		{
+			const char *external = SDL_GetAndroidExternalStoragePath();
+			if (external != NULL && external[0] != '\0')
+			{
+				char baseMarker[PATH_MAX];
+				snprintf(baseMarker, sizeof(baseMarker), "%s/.zh-base-generals-root", external);
+				FILE *fp = fopen(baseMarker, "r");
+				if (fp != NULL)
+				{
+					char basePath[PATH_MAX];
+					if (fgets(basePath, sizeof(basePath), fp) != NULL)
+					{
+						size_t n = strlen(basePath);
+						while (n > 0 && (basePath[n - 1] == '\n' || basePath[n - 1] == '\r'))
+							basePath[--n] = '\0';
+
+						struct stat st;
+						if (n > 0 && stat(basePath, &st) == 0 && S_ISDIR(st.st_mode))
+						{
+							setenv("CNC_GENERALS_PATH", basePath, 1);
+							fprintf(stderr, "INFO: Android base Generals root: %s\n", basePath);
+						}
+						else
+						{
+							fprintf(stderr, "WARNING: Android base Generals marker points to invalid folder: %s\n", basePath);
+						}
+					}
+					fclose(fp);
+				}
+				else
+				{
+					fprintf(stderr, "INFO: Android base Generals marker not set; archive loader will use its normal fallback search\n");
+				}
+			}
+		}
+		fprintf(stderr, "INFO: Android Zero Hour root: %s\n", root);
+#endif
 		PosixPath_Set_Overlays( overlays );
 		for (size_t i = 0; i < overlays.size(); ++i)
 			fprintf( stderr, "generals: overlay %s, searched before the install\n", overlays[i].c_str() );
