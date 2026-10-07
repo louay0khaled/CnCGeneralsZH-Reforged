@@ -102,7 +102,7 @@ static Bool loadBaseGameArchivesFromPath(const AsciiString &path)
 	DEBUG_LOG(("Win32BIGFileSystem::init - loading base Generals archives from '%s'\n", path.str()));
 	fprintf(stderr, "INFO: Mounting Base Generals archives from: %s\n", path.str());
 
-	const Bool loaded = TheArchiveFileSystem->loadBigFilesFromDirectory(path, "*.big", FALSE, FALSE);
+	const Bool loaded = loadBigFilesFromDirectory(path, "*.big", FALSE, FALSE);
 	if (!loaded)
 	{
 		DEBUG_LOG(("Win32BIGFileSystem::init - Textures.big exists in '%s', but no readable BIG archive was mounted\n",
