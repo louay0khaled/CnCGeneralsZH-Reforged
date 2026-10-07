@@ -82,6 +82,10 @@ static const char FIRST_DECADE_GENERALS_FOLDER[] = "Command & Conquer(tm) Genera
 static Bool holdsBaseGameArchives(const char *directory)
 {
 	AsciiString archive = directory;
+	if (!archive.isEmpty() && !archive.endsWith("\\") && !archive.endsWith("/"))
+	{
+		archive.concat("\\");
+	}
 	archive.concat(BASE_GAME_ARCHIVE);
 	return TheLocalFileSystem->doesFileExist(archive.str());
 }
@@ -172,7 +176,24 @@ void Win32BIGFileSystem::init() {
     if (!holdsBaseGameArchives(""))
     {
       AsciiString installPath;
-      GetStringFromGeneralsRegistry("", "InstallPath", installPath );
+
+      // Android SetupActivity resolves the actual original-Generals folder
+      // once (for example ZH_Generals) and PosixMain exports it as
+      // CNC_GENERALS_PATH. Prefer that exact path before legacy registry /
+      // sibling-folder guessing, matching the MYSOREZ Android port.
+      const char *baseEnvValue = getenv("CNC_GENERALS_PATH");
+      if (baseEnvValue != NULL && baseEnvValue[0] != '\0' && holdsBaseGameArchives(baseEnvValue))
+      {
+        installPath = baseEnvValue;
+        DEBUG_LOG(("Win32BIGFileSystem::init - using CNC_GENERALS_PATH='%s' for the base Generals archives\\n",
+                   baseEnvValue));
+        fprintf(stderr, "INFO: Base Generals archives: CNC_GENERALS_PATH=%s\\n", baseEnvValue);
+      }
+
+      if (installPath.isEmpty())
+      {
+        GetStringFromGeneralsRegistry("", "InstallPath", installPath );
+      }
       if (!installPath.isEmpty() && !installPath.endsWith("\\"))
       {
         installPath.concat("\\");
