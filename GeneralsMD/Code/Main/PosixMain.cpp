@@ -585,6 +585,7 @@ int main( int argc, char *argv[] )
 		{
 			const char *baseCandidates[] = {
 				"ZH_Generals",
+				"z_generals",
 				"Generals",
 				"../Command & Conquer Generals",
 				"../Command & Conquer(tm) Generals"
