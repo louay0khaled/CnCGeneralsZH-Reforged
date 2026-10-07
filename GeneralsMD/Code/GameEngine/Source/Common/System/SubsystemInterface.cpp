@@ -177,9 +177,22 @@ void SubsystemInterfaceList::initSubsystem(SubsystemInterface* sys, const char* 
 	}
 	if (path2)
 	{
-		TheSubsystemInitDetail.format("%s: %s", name.str(), path2);
-		DEBUG_LOG(("Subsystem init: %s\n", TheSubsystemInitDetail.str()));
-		ini.load(path2, INI_LOAD_OVERWRITE, pXfer );
+		// A second path is the player's optional loose override when a default archive/INI is
+		// already supplied by path1. Several retail code paths use this form, but a clean Steam
+		// install does not contain every override file. Treat path2 as optional when path1 exists;
+		// keep it mandatory when path1 is NULL (for subsystems whose only source is path2).
+		const Bool optionalOverride = path1 != NULL;
+		if (!optionalOverride || TheFileSystem->doesFileExist(path2))
+		{
+			TheSubsystemInitDetail.format("%s: %s", name.str(), path2);
+			DEBUG_LOG(("Subsystem init: %s\n", TheSubsystemInitDetail.str()));
+			ini.load(path2, INI_LOAD_OVERWRITE, pXfer );
+		}
+		else
+		{
+			TheSubsystemInitDetail.format("%s: optional override missing: %s", name.str(), path2);
+			DEBUG_LOG(("Subsystem init: %s\n", TheSubsystemInitDetail.str()));
+		}
 	}
 	if (dirpath)
 	{
