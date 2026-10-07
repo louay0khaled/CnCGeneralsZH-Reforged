@@ -388,80 +388,126 @@ ArchiveFile * Win32BIGFileSystem::openArchiveFile(const Char *filename) {
 	DEBUG_LOG(("Win32BIGFileSystem::openArchiveFile - opening BIG file %s\n", filename));
 
 	if (fp == NULL) {
-		DEBUG_CRASH(("Could not open archive file %s for parsing", filename));
+		DEBUG_LOG(("Win32BIGFileSystem::openArchiveFile - cannot open %s\n", filename));
+		return NULL;
+	}
+
+	const Int physicalFileSize = fp->size();
+	if (physicalFileSize < 0x10) {
+		DEBUG_LOG(("Win32BIGFileSystem::openArchiveFile - %s is too small to be a BIG archive (%d bytes)\n",
+			filename, physicalFileSize));
+		fp->close();
 		return NULL;
 	}
 
 	AsciiString asciibuf;
 	char buffer[_MAX_PATH];
-	fp->read(buffer, 4); // read the "BIG" at the beginning of the file.
+	if (fp->read(buffer, 4) != 4) {
+		DEBUG_LOG(("Win32BIGFileSystem::openArchiveFile - short BIG identifier in %s\n", filename));
+		fp->close();
+		return NULL;
+	}
 	buffer[4] = 0;
 	if (strcmp(buffer, BIGFileIdentifier) != 0) {
 #if defined(_WIN32)
 		DEBUG_CRASH(("Error reading BIG file identifier in file %s", filename));
 #else
-		// Quietly, and once for each such file: macOS leaves a "._" AppleDouble companion beside every
-		// file it copies onto exFAT or FAT, and "*.big" finds them, so an install that came off such a
-		// volume has twenty of these.  They are not archives and nothing is lost by leaving them out
-		// (C1, PR (f)).
 		DEBUG_LOG(("Win32BIGFileSystem::openArchiveFile - %s is not a BIG archive (no BIGF), left out\n", filename));
 #endif
 		fp->close();
+		return NULL;
+	}
+
+	// Read the BIG header before allocating its archive index.  Android may see arbitrary .big files
+	// beside a Steam install, so malformed archives must be rejected instead of allowing an invalid
+	// file count or unterminated filename to walk past the fixed buffer.
+	if (fp->read(&archiveFileSize, 4) != 4 || fp->read(&numLittleFiles, 4) != 4) {
+		DEBUG_LOG(("Win32BIGFileSystem::openArchiveFile - incomplete BIG header in %s\n", filename));
+		fp->close();
+		return NULL;
+	}
+	numLittleFiles = ntohl(numLittleFiles);
+
+	DEBUG_LOG(("Win32BIGFileSystem::openArchiveFile - size field %d, physical size %d, %d files in %s\n",
+		archiveFileSize, physicalFileSize, numLittleFiles, filename));
+
+	if (numLittleFiles < 0) {
+		DEBUG_LOG(("Win32BIGFileSystem::openArchiveFile - negative file count in %s\n", filename));
+		fp->close();
+		return NULL;
+	}
+
+	// Every entry needs at least 8 bytes for offset/size and one byte for the terminating filename NUL.
+	const Int minimumEntryBytes = 9;
+	const Int maxPossibleEntries = (physicalFileSize - 0x10) / minimumEntryBytes;
+	if (numLittleFiles > maxPossibleEntries) {
+		DEBUG_LOG(("Win32BIGFileSystem::openArchiveFile - impossible file count %d in %s (max %d)\n",
+			numLittleFiles, filename, maxPossibleEntries));
+		fp->close();
+		return NULL;
+	}
+
+	ArchiveFile *archiveFile = NEW Win32BIGFile;
+
+	if (fp->seek(0x10, File::START) < 0) {
+		DEBUG_LOG(("Win32BIGFileSystem::openArchiveFile - cannot seek to BIG directory in %s\n", filename));
+		delete archiveFile;
 		fp = NULL;
 		return NULL;
 	}
 
-	// Allocated after the checks above, not before them: both of those returns used to walk away
-	// from a Win32BIGFile that had just been made. A directory of files that are not archives -
-	// which is what a mod folder handed to -mod can be - leaked one per file.
-	ArchiveFile *archiveFile = NEW Win32BIGFile;
-
-	// read in the file size.
-	fp->read(&archiveFileSize, 4);
-
-	DEBUG_LOG(("Win32BIGFileSystem::openArchiveFile - size of archive file is %d bytes\n", archiveFileSize));
-
-//	char t;
-
-	// read in the number of files contained in this BIG file.
-	// change the order of the bytes cause the file size is in reverse byte order for some reason.
-	fp->read(&numLittleFiles, 4);
-	numLittleFiles = ntohl(numLittleFiles);
-
-	DEBUG_LOG(("Win32BIGFileSystem::openArchiveFile - %d are contained in archive\n", numLittleFiles));
-//	for (Int i = 0; i < 2; ++i) {
-//		t = buffer[i];
-//		buffer[i] = buffer[(4-i)-1];
-//		buffer[(4-i)-1] = t;
-//	}
-
-	// seek to the beginning of the directory listing.
-	fp->seek(0x10, File::START);
-	// read in each directory listing.
 	ArchivedFileInfo *fileInfo = NEW ArchivedFileInfo;
 
 	for (Int i = 0; i < numLittleFiles; ++i) {
 		Int filesize = 0;
 		Int fileOffset = 0;
-		fp->read(&fileOffset, 4);
-		fp->read(&filesize, 4);
+		if (fp->read(&fileOffset, 4) != 4 || fp->read(&filesize, 4) != 4) {
+			DEBUG_LOG(("Win32BIGFileSystem::openArchiveFile - truncated directory entry %d in %s\n", i, filename));
+			delete fileInfo;
+			delete archiveFile;
+			fp = NULL;
+			return NULL;
+		}
 
 		filesize = ntohl(filesize);
 		fileOffset = ntohl(fileOffset);
 
+		if (fileOffset < 0 || filesize < 0 || fileOffset > physicalFileSize ||
+			filesize > physicalFileSize - fileOffset) {
+			DEBUG_LOG(("Win32BIGFileSystem::openArchiveFile - invalid data range in entry %d of %s (offset %d size %d physical %d)\n",
+				i, filename, fileOffset, filesize, physicalFileSize));
+			delete fileInfo;
+			delete archiveFile;
+			fp = NULL;
+			return NULL;
+		}
+
 		fileInfo->m_archiveFilename = archiveFileName;
 		fileInfo->m_offset = fileOffset;
 		fileInfo->m_size = filesize;
-		
-		// read in the path name of the file.
-		Int pathIndex = -1;
-		do {
+
+		Int pathIndex = 0;
+		Bool terminated = FALSE;
+		while (pathIndex < _MAX_PATH - 1) {
+			if (fp->read(buffer + pathIndex, 1) != 1) {
+				break;
+			}
+			if (buffer[pathIndex] == 0) {
+				terminated = TRUE;
+				break;
+			}
 			++pathIndex;
-			fp->read(buffer + pathIndex, 1);
-		} while (buffer[pathIndex] != 0);
+		}
+		if (!terminated) {
+			DEBUG_LOG(("Win32BIGFileSystem::openArchiveFile - invalid/unterminated filename in entry %d of %s\n",
+				i, filename));
+			delete fileInfo;
+			delete archiveFile;
+			fp = NULL;
+			return NULL;
+		}
 
 		Int filenameIndex = pathIndex;
-		// the index test first: a name with no separator used to read buffer[-1] before the test stopped it
 		while ((filenameIndex >= 0) && (buffer[filenameIndex] != '\\') && (buffer[filenameIndex] != '/')) {
 			--filenameIndex;
 		}
@@ -476,8 +522,6 @@ ArchiveFile * Win32BIGFileSystem::openArchiveFile(const Char *filename) {
 		AsciiString debugpath;
 		debugpath = path;
 		debugpath.concat(fileInfo->m_filename);
-//		DEBUG_LOG(("Win32BIGFileSystem::openArchiveFile - adding file %s to archive file %s, file number %d\n", debugpath.str(), fileInfo->m_archiveFilename.str(), i));
-
 		archiveFile->addFile(path, fileInfo);
 	}
 
@@ -486,11 +530,8 @@ ArchiveFile * Win32BIGFileSystem::openArchiveFile(const Char *filename) {
 	delete fileInfo;
 	fileInfo = NULL;
 
-	// leave fp open as the archive file will be using it.
-
 	return archiveFile;
 }
-
 void Win32BIGFileSystem::closeArchiveFile(const Char *filename) {
 	// Need to close the specified big file
 	ArchiveFileMap::iterator it =  m_archiveFileMap.find(filename);
