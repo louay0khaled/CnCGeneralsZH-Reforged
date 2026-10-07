@@ -167,6 +167,34 @@ static void activateThisApp()
 static void activateThisApp() {}
 #endif
 
+#if defined(__ANDROID__)
+/** Put all native diagnostics/settings under app-private storage before the crash handler and
+ * DEBUG_INIT run. Android's installed .so directory is read-only, so desktop user-data discovery
+ * must be given an explicit writable root. */
+static void configureAndroidUserDataDirectory()
+{
+	const char *internal = SDL_GetAndroidInternalStoragePath();
+	if (internal == NULL || internal[0] == '\0')
+	{
+		fprintf( stderr, "WARNING: Android internal storage path is unavailable; native diagnostics may be lost.\n" );
+		return;
+	}
+
+	static char userData[ PATH_MAX ];
+	const int written = snprintf( userData, sizeof( userData ), "%s/ZeroHourData", internal );
+	if (written <= 0 || written >= (int)sizeof( userData ))
+	{
+		fprintf( stderr, "WARNING: Android user-data path is too long; native diagnostics may be lost.\n" );
+		return;
+	}
+
+	if (setenv( "ZH_USER_DATA_DIR", userData, 1 ) != 0)
+		fprintf( stderr, "WARNING: could not set ZH_USER_DATA_DIR=%s\n", userData );
+	else
+		fprintf( stderr, "INFO: Android native user-data directory: %s\n", userData );
+}
+#endif
+
 /** Whether this runs in the Steam Deck's Game Mode (P3): gamescope's session names itself in
 	* XDG_CURRENT_DESKTOP, and Steam's gamepad interface sets SteamGamepadUI for what it starts.  A file
 	* dialog may not show there, so PosixMain asks for -root in Steam's launch options instead.  (Both names
@@ -534,6 +562,12 @@ static Bool takeOneCopyLock( void )
 //=============================================================================
 int main( int argc, char *argv[] )
 {
+#if defined(__ANDROID__)
+	// Configure writable app-private diagnostics before installCrashHandlers(): even a crash this early
+	// must land somewhere the Android UI can read on the next launch.
+	configureAndroidUserDataDirectory();
+#endif
+
 	// Before anything else, and before another thread exists: a crash from here on leaves
 	// ReleaseCrashInfo.txt, as WinMain's _set_se_translator and SetUnhandledExceptionFilter make it on Windows.
 	installCrashHandlers();

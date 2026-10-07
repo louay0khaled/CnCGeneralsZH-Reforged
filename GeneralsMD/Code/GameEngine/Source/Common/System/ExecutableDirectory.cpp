@@ -118,6 +118,21 @@ Bool isExecutablePackaged( void )
 
 void getLogDirectory( char *buf, size_t size, Bool keepTrailingSeparator )
 {
+#if defined(__ANDROID__)
+	// Android's native .so directory is inside the immutable APK installation. Logs and
+	// crash reports must live under the app-private writable user-data directory instead.
+	char logs[ 4096 ];
+	buf[0] = 0;
+	if (!findUserDataDirectory( logs, sizeof( logs ) ) ||
+			strlcat( logs, "Logs", sizeof( logs ) ) >= sizeof( logs ))
+		return;
+	zh_mkdir( logs );
+	if (strlcpy( buf, logs, size ) >= size ||
+			(keepTrailingSeparator && strlcat( buf, "\\", size ) >= size))
+		buf[0] = 0;
+	return;
+#endif
+
 	getExecutableDirectory( buf, size, keepTrailingSeparator );
 	if (!isExecutablePackaged())
 		return;

@@ -23,6 +23,7 @@ public final class SetupActivity extends Activity {
     // Bump this whenever the Reforged-owned Data tree changes. The data is kept in
     // private app storage and refreshed atomically before native startup.
     private static final String REFORGED_DATA_VERSION = "2026-10-07-2";
+    private static final String NATIVE_DIAGNOSTICS_SEEN = ".native-diagnostics-seen";
     private boolean pickerOpen = false;
     private boolean permissionScreenOpen = false;
 
@@ -193,6 +194,7 @@ public final class SetupActivity extends Activity {
 
         String root = savedRoot();
         if (root != null && inspect(new File(root)).complete()) {
+            if (showNativeDiagnosticsIfPresent()) return;
             launchGame();
             return;
         }
@@ -442,6 +444,95 @@ public final class SetupActivity extends Activity {
         } catch (Exception e) {
             showError("تعذر حفظ مسارات ملفات اللعبة.");
         }
+    }
+
+    private File nativeLogsDir() {
+        return new File(new File(getFilesDir(), "ZeroHourData"), "Logs");
+    }
+
+    private File nativeCrashFile() {
+        return new File(nativeLogsDir(), "ReleaseCrashInfo.txt");
+    }
+
+    private File nativeDebugFile() {
+        return new File(nativeLogsDir(), "DebugLogFile.txt");
+    }
+
+    private File nativeDiagnosticsSeenFile() {
+        return new File(getFilesDir(), NATIVE_DIAGNOSTICS_SEEN);
+    }
+
+    private long readDiagnosticsSeen() {
+        File file = nativeDiagnosticsSeenFile();
+        if (!file.isFile()) return 0L;
+        try {
+            return Long.parseLong(new String(java.nio.file.Files.readAllBytes(file.toPath()), StandardCharsets.UTF_8).trim());
+        } catch (Exception e) {
+            return 0L;
+        }
+    }
+
+    private void markDiagnosticsSeen(long timestamp) {
+        try (FileOutputStream out = new FileOutputStream(nativeDiagnosticsSeenFile(), false)) {
+            out.write(Long.toString(timestamp).getBytes(StandardCharsets.UTF_8));
+            out.flush();
+            out.getFD().sync();
+        } catch (Exception ignored) {}
+    }
+
+    private String readTail(File file, int maxChars) {
+        if (file == null || !file.isFile()) return "";
+        try {
+            String text = new String(java.nio.file.Files.readAllBytes(file.toPath()), StandardCharsets.UTF_8);
+            if (text.length() <= maxChars) return text;
+            return "…\n" + text.substring(text.length() - maxChars);
+        } catch (Exception e) {
+            return "تعذر قراءة السجل: " + e.getMessage();
+        }
+    }
+
+    /**
+     * Native code writes ReleaseCrashInfo.txt and DebugLogFile.txt under app-private storage.
+     * Surface the newest report after a failed run so a native crash is not silently invisible.
+     */
+    private boolean showNativeDiagnosticsIfPresent() {
+        File crash = nativeCrashFile();
+        File debug = nativeDebugFile();
+        long crashTime = crash.isFile() ? crash.lastModified() : 0L;
+        long debugTime = debug.isFile() ? debug.lastModified() : 0L;
+        long latest = Math.max(crashTime, debugTime);
+        if (latest <= 0L || latest <= readDiagnosticsSeen()) return false;
+
+        StringBuilder body = new StringBuilder();
+        if (crashTime > 0L) {
+            body.append("CRASH REPORT\n");
+            body.append(readTail(crash, 7000));
+            body.append("\n\n");
+        }
+        if (debugTime > 0L) {
+            body.append("DEBUG LOG (tail)\n");
+            body.append(readTail(debug, 5000));
+        }
+
+        final String report = body.toString();
+        markDiagnosticsSeen(latest);
+
+        new AlertDialog.Builder(this)
+                .setTitle("تشخيص آخر تشغيل")
+                .setMessage(report)
+                .setNeutralButton("نسخ السجل", (d, w) -> {
+                    android.content.ClipboardManager clipboard =
+                            (android.content.ClipboardManager) getSystemService(CLIPBOARD_SERVICE);
+                    if (clipboard != null) {
+                        clipboard.setPrimaryClip(android.content.ClipData.newPlainText("Zero Hour diagnostics", report));
+                        Toast.makeText(this, "تم نسخ السجل.", Toast.LENGTH_SHORT).show();
+                    }
+                })
+                .setPositiveButton("تشغيل اللعبة", (d, w) -> launchGame())
+                .setNegativeButton("إغلاق", null)
+                .setCancelable(false)
+                .show();
+        return true;
     }
 
     private void launchGame() {
