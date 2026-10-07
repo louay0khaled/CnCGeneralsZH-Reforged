@@ -121,13 +121,13 @@ void getLogDirectory( char *buf, size_t size, Bool keepTrailingSeparator )
 #if defined(__ANDROID__)
 	// Android's native .so directory is inside the immutable APK installation. Logs and
 	// crash reports must live under the app-private writable user-data directory instead.
-	char logs[ 4096 ];
+	char androidLogs[ 4096 ];
 	buf[0] = 0;
-	if (!findUserDataDirectory( logs, sizeof( logs ) ) ||
-			strlcat( logs, "Logs", sizeof( logs ) ) >= sizeof( logs ))
+	if (!findUserDataDirectory( androidLogs, sizeof( androidLogs ) ) ||
+			strlcat( androidLogs, "Logs", sizeof( androidLogs ) ) >= sizeof( androidLogs ))
 		return;
-	zh_mkdir( logs );
-	if (strlcpy( buf, logs, size ) >= size ||
+	zh_mkdir( androidLogs );
+	if (strlcpy( buf, androidLogs, size ) >= size ||
 			(keepTrailingSeparator && strlcat( buf, "\\", size ) >= size))
 		buf[0] = 0;
 	return;
