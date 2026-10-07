@@ -36,6 +36,10 @@ android {
                 "../../Code/Libraries/Source/SDL3/android-project/app/src/main/java"
             ]
             res.srcDirs = ["src/main/res"]
+            // Reforged-owned data is part of the Android application, not the user's Steam install.
+            // It is extracted once to private app storage before the native engine starts and mounted
+            // as the normal POSIX overlay, leaving the original game files completely untouched.
+            assets.srcDirs = ["../../../Code/Data"]
             jniLibs.srcDirs = ["libs"]
         }
     }
