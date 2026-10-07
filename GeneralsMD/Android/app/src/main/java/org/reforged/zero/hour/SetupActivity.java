@@ -10,6 +10,7 @@ import android.widget.FrameLayout;
 import android.widget.LinearLayout;
 import android.widget.ScrollView;
 import android.widget.TextView;
+import android.text.TextUtils;
 import android.app.AlertDialog;
 import android.content.ActivityNotFoundException;
 import android.content.Intent;
@@ -245,10 +246,10 @@ public final class SetupActivity extends Activity {
     private LinearLayout card(LinearLayout page) {
         LinearLayout c = new LinearLayout(this);
         c.setOrientation(LinearLayout.VERTICAL);
-        c.setPadding(dp(17), dp(16), dp(17), dp(16));
+        c.setPadding(dp(16), dp(16), dp(16), dp(16));
         c.setBackground(rounded(Color.rgb(27, 32, 34), 18f));
         LinearLayout.LayoutParams lp = new LinearLayout.LayoutParams(-1, -2);
-        lp.topMargin = dp(12);
+        lp.topMargin = dp(16);
         page.addView(c, lp);
         return c;
     }
@@ -312,24 +313,38 @@ public final class SetupActivity extends Activity {
         bottomNav = new LinearLayout(this);
         bottomNav.setOrientation(LinearLayout.HORIZONTAL);
         bottomNav.setGravity(Gravity.CENTER);
-        bottomNav.setPadding(dp(6), dp(4), dp(6), dp(4));
+        bottomNav.setPadding(dp(8), dp(6), dp(8), dp(6));
         bottomNav.setBackgroundColor(Color.rgb(22, 27, 29));
 
         String[] icons = {"⌂", "▣", "☰", "⚙", "?"};
         String[] labels = {"الرئيسية", "الرسوميات", "الواجهة", "الأدوات", "المساعدة"};
         for (int i = 0; i < labels.length; i++) {
-            TextView item = makeText(icons[i] + "\n" + labels[i], 12f, textSecondary, true);
-            item.setGravity(Gravity.CENTER);
-            item.setPadding(0, dp(6), 0, dp(4));
-            item.setTag(i);
             final int tab = i;
+            LinearLayout item = new LinearLayout(this);
+            item.setOrientation(LinearLayout.VERTICAL);
+            item.setGravity(Gravity.CENTER);
+            item.setPadding(dp(4), dp(4), dp(4), dp(4));
+            item.setTag(tab);
+            item.setClickable(true);
+            item.setFocusable(true);
+
+            TextView icon = makeText(icons[i], 21f, textSecondary, true);
+            icon.setGravity(Gravity.CENTER);
+            item.addView(icon, new LinearLayout.LayoutParams(-1, dp(27)));
+
+            TextView label = makeText(labels[i], 10f, textSecondary, true);
+            label.setGravity(Gravity.CENTER);
+            label.setMaxLines(1);
+            label.setEllipsize(TextUtils.TruncateAt.END);
+            item.addView(label, new LinearLayout.LayoutParams(-1, dp(20)));
+
             item.setOnClickListener(v -> {
                 selectedTab = tab;
                 renderTab();
             });
-            bottomNav.addView(item, new LinearLayout.LayoutParams(0, dp(58), 1f));
+            bottomNav.addView(item, new LinearLayout.LayoutParams(0, dp(70), 1f));
         }
-        root.addView(bottomNav, new LinearLayout.LayoutParams(-1, dp(64)));
+        root.addView(bottomNav, new LinearLayout.LayoutParams(-1, dp(78)));
 
         setContentView(root);
         renderTab();
@@ -344,10 +359,13 @@ public final class SetupActivity extends Activity {
             final int selectedBg = Color.rgb(48, 60, 45);
             final int secondary = Color.rgb(171, 181, 176);
             for (int i = 0; i < bottomNav.getChildCount(); i++) {
-                TextView item = (TextView) bottomNav.getChildAt(i);
+                LinearLayout item = (LinearLayout) bottomNav.getChildAt(i);
                 boolean selected = i == selectedTab;
-                item.setTextColor(selected ? primary : secondary);
                 item.setBackground(selected ? rounded(selectedBg, 18f) : null);
+                if (item.getChildCount() >= 2) {
+                    ((TextView) item.getChildAt(0)).setTextColor(selected ? primary : secondary);
+                    ((TextView) item.getChildAt(1)).setTextColor(selected ? primary : secondary);
+                }
             }
         }
 
@@ -361,7 +379,7 @@ public final class SetupActivity extends Activity {
     }
 
     private void sectionTitle(LinearLayout page, String title, String subtitle) {
-        TextView t = makeText(title, 25f, Color.rgb(239, 242, 237), true);
+        TextView t = makeText(title, 21f, Color.rgb(239, 242, 237), true);
         page.addView(t, new LinearLayout.LayoutParams(-1, -2));
         if (subtitle != null)
             addCardText(page, subtitle, 13f, Color.rgb(171, 181, 176), false, 2);
@@ -391,12 +409,16 @@ public final class SetupActivity extends Activity {
         LinearLayout files = card(p);
         addCardText(files, "FILES & INSTALLATION", 11f,
                 Color.rgb(160, 197, 92), true, 0);
-        zeroHourPathView = addCardText(files, "مسار Zero Hour: —", 13f,
-                Color.rgb(171, 181, 176), false, 10);
+        zeroHourPathView = addCardText(files, "مسار Zero Hour: —", 12f,
+                Color.rgb(171, 181, 176), false, 8);
+        zeroHourPathView.setMaxLines(2);
+        zeroHourPathView.setEllipsize(TextUtils.TruncateAt.END);
         fileStatusView = addCardText(files, "الحالة: جارٍ التحقق…", 14f,
                 Color.rgb(239, 242, 237), true, 8);
-        classicPathView = addCardText(files, "مسار Generals الكلاسيكية: —", 13f,
+        classicPathView = addCardText(files, "مسار Generals الكلاسيكية: —", 12f,
                 Color.rgb(171, 181, 176), false, 8);
+        classicPathView.setMaxLines(2);
+        classicPathView.setEllipsize(TextUtils.TruncateAt.END);
 
         LinearLayout buttons = new LinearLayout(this);
         buttons.setOrientation(LinearLayout.HORIZONTAL);
@@ -418,7 +440,7 @@ public final class SetupActivity extends Activity {
                 Color.rgb(27, 32, 34), Color.rgb(220, 130, 118));
         reset.setTextSize(14f);
         reset.setOnClickListener(v -> resetGameFolders());
-        LinearLayout.LayoutParams rlp = new LinearLayout.LayoutParams(0, dp(50), 0.72f);
+        LinearLayout.LayoutParams rlp = new LinearLayout.LayoutParams(0, dp(50), 1f);
         rlp.setMarginStart(dp(8));
         buttons.addView(reset, rlp);
 
