@@ -28,6 +28,7 @@
 #include "PreRTS.h"	// This must go first in EVERY cpp file int the GameEngine
 
 #include "Common/SubsystemInterface.h"
+#include "Common/FileSystem.h"
 #include "Common/Xfer.h"
 
 #ifdef _INTERNAL
