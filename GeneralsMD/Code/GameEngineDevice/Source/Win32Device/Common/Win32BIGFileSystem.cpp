@@ -51,6 +51,10 @@
 #include "Common/EarlyCommandLine.h"
 #include <stdio.h>
 #include <stdlib.h>
+#if !defined(_WIN32)
+#include <dirent.h>
+#include <strings.h>
+#endif
 
 #ifdef _INTERNAL
 // for occasional debugging...
@@ -95,6 +99,71 @@ static Bool holdsBaseGameArchives(const char *directory)
 	return TheLocalFileSystem->doesFileExist(archive.str());
 }
 
+#if defined(__ANDROID__)
+/*
+ * Android setup can legitimately hand us an absolute path outside the Zero Hour root
+ * (the Steam installation keeps the original Generals archives in a separate folder).
+ * The generic Win32-style directory walker is intentionally rooted at the current game
+ * directory, so an absolute external base path must be enumerated as a physical POSIX
+ * directory here. The archives are still opened through openArchiveFile(), which means
+ * the engine's normal BIG parser and virtual directory tree remain unchanged.
+ */
+static Bool loadBigFilesFromAbsoluteAndroidDirectory(Win32BIGFileSystem &fileSystem, const AsciiString &directory)
+{
+	const char *dirPath = directory.str();
+	DIR *dir = opendir(dirPath);
+	if (dir == NULL)
+	{
+		fprintf(stderr, "ERROR: Android cannot open Base Generals directory: %s (%s)\n",
+			dirPath, strerror(errno));
+		return FALSE;
+	}
+
+	Bool actuallyAdded = FALSE;
+	unsigned int candidates = 0;
+	unsigned int loaded = 0;
+
+	while (struct dirent *entry = readdir(dir))
+	{
+		const char *name = entry->d_name;
+		const size_t length = strlen(name);
+		if (length <= 4 || strcasecmp(name + length - 4, ".big") != 0)
+			continue;
+
+		++candidates;
+
+		AsciiString archivePath = directory;
+		if (!archivePath.isEmpty() && !archivePath.endsWith("/") && !archivePath.endsWith("\"))
+			archivePath.concat("/");
+		archivePath.concat(name);
+
+		struct stat status;
+		if (stat(archivePath.str(), &status) != 0 || !S_ISREG(status.st_mode))
+			continue;
+
+		ArchiveFile *archiveFile = fileSystem.openArchiveFile(archivePath.str());
+		if (archiveFile == NULL)
+		{
+			fprintf(stderr, "WARNING: Android failed to open Base Generals archive: %s\n", archivePath.str());
+			continue;
+		}
+
+		DEBUG_LOG(("Android Base Generals: loading %s into the directory tree.\n", archivePath.str()));
+		fprintf(stderr, "INFO: Android mounted Base Generals archive: %s (%lld bytes)\n",
+			archivePath.str(), (long long)status.st_size);
+		fileSystem.loadIntoDirectoryTree(archiveFile, archivePath, FALSE);
+		loaded = loaded + 1;
+		actuallyAdded = TRUE;
+	}
+
+	closedir(dir);
+
+	fprintf(stderr, "INFO: Android Base Generals physical mount scan: %u .big candidates, %u mounted\n",
+		candidates, loaded);
+	return actuallyAdded;
+}
+#endif
+
 static Bool loadBaseGameArchivesFromPath(Win32BIGFileSystem &fileSystem, const AsciiString &path)
 {
 	if (path.isEmpty() || !holdsBaseGameArchives(path.str()))
@@ -103,7 +172,24 @@ static Bool loadBaseGameArchivesFromPath(Win32BIGFileSystem &fileSystem, const A
 	DEBUG_LOG(("Win32BIGFileSystem::init - loading base Generals archives from '%s'\n", path.str()));
 	fprintf(stderr, "INFO: Mounting Base Generals archives from: %s\n", path.str());
 
-	const Bool loaded = fileSystem.loadBigFilesFromDirectory(path, "*.big", FALSE, FALSE);
+	Bool loaded = FALSE;
+
+#if defined(__ANDROID__)
+	/*
+	 * An absolute path is the persisted result of the Android setup picker. It is not
+	 * relative to the Zero Hour working directory, so use the physical-directory path
+	 * on Android instead of the engine's relative FindFirstFile-style walker.
+	 */
+	if (path.str()[0] == '/')
+	{
+		loaded = loadBigFilesFromAbsoluteAndroidDirectory(fileSystem, path);
+	}
+	else
+#endif
+	{
+		loaded = fileSystem.loadBigFilesFromDirectory(path, "*.big", FALSE, FALSE);
+	}
+
 	if (!loaded)
 	{
 		DEBUG_LOG(("Win32BIGFileSystem::init - Textures.big exists in '%s', but no readable BIG archive was mounted\n",
