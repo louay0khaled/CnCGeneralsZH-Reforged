@@ -15,10 +15,14 @@ import android.widget.Toast;
 import java.io.File;
 import java.io.FileOutputStream;
 import java.io.IOException;
+import java.io.InputStream;
 import java.nio.charset.StandardCharsets;
 
 public final class SetupActivity extends Activity {
     private static final int REQUEST_FOLDER = 4101;
+    // Bump this whenever the Reforged-owned Data tree changes. The data is kept in
+    // private app storage and refreshed atomically before native startup.
+    private static final String REFORGED_DATA_VERSION = "2026-10-07-1";
     private boolean pickerOpen = false;
     private boolean permissionScreenOpen = false;
 
@@ -78,7 +82,99 @@ public final class SetupActivity extends Activity {
         return readMarker(baseRootMarker());
     }
 
+    private File reforgedDataDir() {
+        return new File(getFilesDir(), "ReforgedData");
+    }
+
+    private File reforgedDataVersionFile() {
+        return new File(getFilesDir(), ".reforged-data-version");
+    }
+
+    private boolean ensureReforgedData() {
+        File destination = reforgedDataDir();
+        String installed = readMarker(reforgedDataVersionFile());
+        if (REFORGED_DATA_VERSION.equals(installed) && destination.isDirectory()) {
+            return true;
+        }
+
+        File temporary = new File(getFilesDir(), "ReforgedData.new");
+        deleteTree(temporary);
+        try {
+            if (!temporary.mkdirs() && !temporary.isDirectory()) {
+                throw new IOException("could not create temporary Reforged data directory");
+            }
+            copyAssetTree("", temporary);
+
+            File temporaryVersion = new File(getFilesDir(), ".reforged-data-version.new");
+            try (FileOutputStream out = new FileOutputStream(temporaryVersion, false)) {
+                out.write((REFORGED_DATA_VERSION + "\\n").getBytes(StandardCharsets.UTF_8));
+                out.flush();
+                out.getFD().sync();
+            }
+
+            deleteTree(destination);
+            if (!temporary.renameTo(destination)) {
+                throw new IOException("could not activate Reforged data directory");
+            }
+
+            File version = reforgedDataVersionFile();
+            if (version.exists() && !version.delete()) {
+                throw new IOException("could not replace Reforged data version");
+            }
+            if (!temporaryVersion.renameTo(version)) {
+                throw new IOException("could not activate Reforged data version");
+            }
+            return true;
+        } catch (Exception e) {
+            deleteTree(temporary);
+            return false;
+        }
+    }
+
+    private void copyAssetTree(String assetPath, File destination) throws IOException {
+        String[] children = getAssets().list(assetPath);
+        if (children != null && children.length > 0) {
+            if (!destination.exists() && !destination.mkdirs()) {
+                throw new IOException("could not create " + destination);
+            }
+            for (String child : children) {
+                String childAsset = assetPath.isEmpty() ? child : assetPath + "/" + child;
+                copyAssetTree(childAsset, new File(destination, child));
+            }
+            return;
+        }
+
+        File parent = destination.getParentFile();
+        if (parent != null && !parent.isDirectory() && !parent.mkdirs()) {
+            throw new IOException("could not create " + parent);
+        }
+        try (InputStream in = getAssets().open(assetPath);
+             FileOutputStream out = new FileOutputStream(destination, false)) {
+            byte[] buffer = new byte[64 * 1024];
+            int count;
+            while ((count = in.read(buffer)) != -1) {
+                out.write(buffer, 0, count);
+            }
+            out.flush();
+            out.getFD().sync();
+        }
+    }
+
+    private void deleteTree(File file) {
+        if (file == null || !file.exists()) return;
+        File[] children = file.listFiles();
+        if (children != null) {
+            for (File child : children) deleteTree(child);
+        }
+        file.delete();
+    }
+
     private void prepare() {
+        if (!ensureReforgedData()) {
+            showError("تعذر تجهيز ملفات Zero Hour Reforged المدمجة داخل التطبيق.");
+            return;
+        }
+
         String root = savedRoot();
         if (root != null && inspect(new File(root)).complete()) {
             launchGame();
