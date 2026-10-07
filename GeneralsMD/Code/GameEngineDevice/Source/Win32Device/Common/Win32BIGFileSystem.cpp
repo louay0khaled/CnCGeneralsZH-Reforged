@@ -359,7 +359,7 @@ void Win32BIGFileSystem::init() {
         }
       }
 
-      if (installPath.isEmpty() || !loadBaseGameArchivesFromPath(*this, installPath))
+      if (installPath.isEmpty() || !loadBaseGameArchivesFromPath(installPath))
       {
         reportMissingBaseGame();
       }
