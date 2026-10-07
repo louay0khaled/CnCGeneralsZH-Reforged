@@ -22,7 +22,7 @@ public final class SetupActivity extends Activity {
     private static final int REQUEST_FOLDER = 4101;
     // Bump this whenever the Reforged-owned Data tree changes. The data is kept in
     // private app storage and refreshed atomically before native startup.
-    private static final String REFORGED_DATA_VERSION = "2026-10-07-1";
+    private static final String REFORGED_DATA_VERSION = "2026-10-07-2";
     private boolean pickerOpen = false;
     private boolean permissionScreenOpen = false;
 
@@ -90,7 +90,23 @@ public final class SetupActivity extends Activity {
         return new File(getFilesDir(), ".reforged-data-version");
     }
 
+    private boolean reforgedAssetExists(String assetPath) {
+        try (InputStream in = getAssets().open(assetPath)) {
+            return true;
+        } catch (IOException e) {
+            return false;
+        }
+    }
+
     private boolean ensureReforgedData() {
+        // These two files prove that the build actually embedded the Reforged asset tree.
+        // A missing asset must never degrade into an empty ReforgedData directory and a
+        // later opaque INI crash.
+        if (!reforgedAssetExists("Data/INI/ScienceReforged.ini") ||
+                !reforgedAssetExists("Data/Patch.str")) {
+            return false;
+        }
+
         File destination = reforgedDataDir();
         String installed = readMarker(reforgedDataVersionFile());
         if (REFORGED_DATA_VERSION.equals(installed) && destination.isDirectory()) {
