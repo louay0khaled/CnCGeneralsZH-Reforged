@@ -234,6 +234,7 @@ public final class SetupActivity extends Activity {
 
         String[] insideNames = {
                 "ZH_Generals",
+                "z_generals",
                 "Generals",
                 "Command & Conquer Generals",
                 "Command & Conquer(tm) Generals"
