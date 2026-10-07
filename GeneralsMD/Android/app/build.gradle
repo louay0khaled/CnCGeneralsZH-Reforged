@@ -45,7 +45,7 @@ android {
         }
     }
 
-    def reforgedDataDir = file("../../../Code/Data")
+    def reforgedDataDir = file("../../Code/Data")
     def generatedReforgedAssetsDir = file("${buildDir}/generated/reforged-assets")
 
     tasks.register("prepareReforgedAssets", Sync) {
