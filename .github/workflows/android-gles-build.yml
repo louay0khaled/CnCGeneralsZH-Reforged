@@ -132,6 +132,18 @@ jobs:
               echo "ERROR: APK zip integrity check failed."
               printf '%s\n' "1" > android-package-exit-code.txt
             }
+
+            # The runtime expects ReforgedData/Data/... because the engine resolves
+            # the fork-owned files through the normal "Data\\..." overlay namespace.
+            # Fail CI if either sentinel was omitted from the APK.
+            if ! unzip -l "${apk}" | grep -Fq "assets/Data/INI/ScienceReforged.ini"; then
+              echo "ERROR: APK is missing assets/Data/INI/ScienceReforged.ini."
+              printf '%s\n' "1" > android-package-exit-code.txt
+            fi
+            if ! unzip -l "${apk}" | grep -Fq "assets/Data/Patch.str"; then
+              echo "ERROR: APK is missing assets/Data/Patch.str."
+              printf '%s\n' "1" > android-package-exit-code.txt
+            fi
           fi
           exit 0
 
