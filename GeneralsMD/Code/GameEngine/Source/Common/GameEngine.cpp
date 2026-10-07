@@ -31,6 +31,7 @@
 #include "PreRTS.h"	// This must go first in EVERY cpp file in the GameEngine
 #include "zhio.h"
 #include "Common/MessageBoxFlags.h"	// MessageBoxWrapper and its flags
+#include <exception>
 #include "Platform/SleepMilliseconds.h"
 #if !defined(_WIN32)
 #include <unistd.h>		// getpid, for the model-checksum cache's scratch file
@@ -833,6 +834,7 @@ static void startAutoNetGame( void )
 void GameEngine::init( void ) {} /// @todo: I changed this to take argc & argv so we can parse those after the GDF is loaded.  We need to rethink this immediately as it is a nasty hack
 void GameEngine::init( int argc, char *argv[] )
 {
+	const char *initStage = "entering GameEngine::init";
 	try {
 		//create an INI object to use for loading stuff
 		INI ini;
@@ -889,6 +891,7 @@ void GameEngine::init( int argc, char *argv[] )
 		InitRandom();
 
 		// Create the low-level file system interface
+		initStage = "createFileSystem";
 		TheFileSystem = createFileSystem();
 
 		// not part of the subsystem list, because it should normally never be reset!
@@ -920,6 +923,7 @@ void GameEngine::init( int argc, char *argv[] )
 		xferCRC.open("lightCRC");
 
 
+		initStage = "TheLocalFileSystem";
 		initSubsystem(TheLocalFileSystem, "TheLocalFileSystem", createLocalFileSystem(), NULL);
 
 		//Kris: Patch 1.01 - November 17, 2003
@@ -939,6 +943,7 @@ void GameEngine::init( int argc, char *argv[] )
 	#endif/////////////////////////////////////////////////////////////////////////////////////////////
 
 
+		initStage = "TheArchiveFileSystem";
 		initSubsystem(TheArchiveFileSystem, "TheArchiveFileSystem", createArchiveFileSystem(), NULL); // this MUST come after TheLocalFileSystem creation
 
     	#ifdef DUMP_PERF_STATS///////////////////////////////////////////////////////////////////////////
@@ -987,6 +992,7 @@ void GameEngine::init( int argc, char *argv[] )
 			}
 		}
 
+		initStage = "TheWritableGlobalData";
 		initSubsystem(TheWritableGlobalData, "TheWritableGlobalData", MSGNEW("GameEngineSubsystem") GlobalData(), &xferCRC, "Data\\INI\\Default\\GameData.ini", "Data\\INI\\GameData.ini");
 
 
@@ -1398,12 +1404,25 @@ void GameEngine::init( int argc, char *argv[] )
 		if (e.mFailureMessage)
 			RELEASE_CRASH((e.mFailureMessage));
 		else
-			RELEASE_CRASH(("Uncaught Exception during initialization."));
-
+		{
+			AsciiString why;
+			why.format("INI exception during initialization at %s.", initStage);
+			RELEASE_CRASH((why.str()));
+		}
+	}
+	catch (const std::exception &e)
+	{
+		AsciiString why;
+		why.format("C++ exception during initialization at %s: %s", initStage, e.what());
+		DEBUG_LOG(("GameEngine::init - %s\n", why.str()));
+		RELEASE_CRASH((why.str()));
 	}
 	catch (...)
 	{
-		RELEASE_CRASH(("Uncaught Exception during initialization."));
+		AsciiString why;
+		why.format("Uncaught exception during initialization at %s.", initStage);
+		DEBUG_LOG(("GameEngine::init - %s\n", why.str()));
+		RELEASE_CRASH((why.str()));
 	}
 
 	if(!TheGlobalData->m_playIntro)
