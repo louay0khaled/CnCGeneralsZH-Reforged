@@ -452,6 +452,28 @@ static void appendUserArtOverlay( std::vector<std::string> &overlays )
 	* that is not a directory. */
 static Bool chooseOverlays( int argc, char *argv[], std::vector<std::string> &overlays )
 {
+#if defined(__ANDROID__)
+	// The APK carries the fork's own Data tree. SetupActivity extracts it to private app
+	// storage before native startup; add it as the first normal POSIX overlay so Data\\INI,
+	// Data\\Window, scripts, scenarios and Reforged UI assets work without touching Steam data.
+	const char *androidInternal = SDL_GetAndroidInternalStoragePath();
+	if (androidInternal != NULL && androidInternal[0] != '\0')
+	{
+		const std::string candidate = std::string(androidInternal) + "/ReforgedData";
+		char real[ PATH_MAX ];
+		struct stat status;
+		if (realpath(candidate.c_str(), real) != NULL && stat(real, &status) == 0 && S_ISDIR(status.st_mode))
+		{
+			overlays.push_back(real);
+			fprintf(stderr, "INFO: Android Reforged data overlay: %s\n", real);
+		}
+		else
+		{
+			fprintf(stderr, "WARNING: Android Reforged data overlay is unavailable: %s\n", candidate.c_str());
+		}
+	}
+#endif
+
 	for (int i = 1; i + 1 < argc; ++i)
 	{
 		if (strcasecmp( argv[i], "-overlay" ) != 0)
