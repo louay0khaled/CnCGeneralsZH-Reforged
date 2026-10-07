@@ -94,7 +94,7 @@ static Bool holdsBaseGameArchives(const char *directory)
 	return TheLocalFileSystem->doesFileExist(archive.str());
 }
 
-static Bool loadBaseGameArchivesFromPath(const AsciiString &path)
+static Bool loadBaseGameArchivesFromPath(Win32BIGFileSystem &fileSystem, const AsciiString &path)
 {
 	if (path.isEmpty() || !holdsBaseGameArchives(path.str()))
 		return FALSE;
@@ -102,7 +102,7 @@ static Bool loadBaseGameArchivesFromPath(const AsciiString &path)
 	DEBUG_LOG(("Win32BIGFileSystem::init - loading base Generals archives from '%s'\n", path.str()));
 	fprintf(stderr, "INFO: Mounting Base Generals archives from: %s\n", path.str());
 
-	const Bool loaded = loadBigFilesFromDirectory(path, "*.big", FALSE, FALSE);
+	const Bool loaded = fileSystem.loadBigFilesFromDirectory(path, "*.big", FALSE, FALSE);
 	if (!loaded)
 	{
 		DEBUG_LOG(("Win32BIGFileSystem::init - Textures.big exists in '%s', but no readable BIG archive was mounted\n",
@@ -284,7 +284,7 @@ void Win32BIGFileSystem::init() {
         }
       }
 
-      if (installPath.isEmpty() || !loadBaseGameArchivesFromPath(installPath))
+      if (installPath.isEmpty() || !loadBaseGameArchivesFromPath(*this, installPath))
       {
         reportMissingBaseGame();
       }
