@@ -452,6 +452,7 @@ ArchiveFile * Win32BIGFileSystem::openArchiveFile(const Char *filename) {
 	if (fp->seek(0x10, File::START) < 0) {
 		DEBUG_LOG(("Win32BIGFileSystem::openArchiveFile - cannot seek to BIG directory in %s\n", filename));
 		delete archiveFile;
+		fp->close();
 		fp = NULL;
 		return NULL;
 	}
