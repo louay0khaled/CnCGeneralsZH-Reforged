@@ -55,6 +55,7 @@
 #if !defined(_WIN32)
 #include <dirent.h>
 #include <strings.h>
+#include <algorithm>
 #endif
 
 #ifdef _INTERNAL
@@ -122,6 +123,7 @@ Bool Win32BIGFileSystem::loadBaseGameArchivesFromPath(const AsciiString &path)
 		Bool actuallyAdded = FALSE;
 		unsigned int candidates = 0;
 		unsigned int loaded = 0;
+		std::vector<std::string> archiveNames;
 
 		while (struct dirent *entry = readdir(dir))
 		{
@@ -129,13 +131,20 @@ Bool Win32BIGFileSystem::loadBaseGameArchivesFromPath(const AsciiString &path)
 			const size_t length = strlen(name);
 			if (length <= 4 || strcasecmp(name + length - 4, ".big") != 0)
 				continue;
+			archiveNames.push_back(name);
+		}
 
-			++candidates;
+		closedir(dir);
+		std::sort(archiveNames.begin(), archiveNames.end());
+		candidates = (unsigned int)archiveNames.size();
 
+		for (size_t index = 0; index < archiveNames.size(); ++index)
+		{
+			const std::string &name = archiveNames[index];
 			AsciiString archivePath = path;
 			if (!archivePath.isEmpty() && !archivePath.endsWith("/") && !archivePath.endsWith("\\"))
 				archivePath.concat("/");
-			archivePath.concat(name);
+			archivePath.concat(name.c_str());
 
 			struct stat status;
 			if (stat(archivePath.str(), &status) != 0 || !S_ISREG(status.st_mode))
@@ -154,11 +163,10 @@ Bool Win32BIGFileSystem::loadBaseGameArchivesFromPath(const AsciiString &path)
 			fprintf(stderr, "INFO: Android mounted Base Generals archive: %s (%lld bytes)\n",
 				archivePath.str(), (long long)status.st_size);
 			loadIntoDirectoryTree(archiveFile, archivePath, FALSE);
+			m_archiveFileMap[archivePath] = archiveFile;
 			++loaded;
 			actuallyAdded = TRUE;
 		}
-
-		closedir(dir);
 		fprintf(stderr, "INFO: Android Base Generals physical mount scan: %u .big candidates, %u mounted\n",
 			candidates, loaded);
 		return actuallyAdded;
