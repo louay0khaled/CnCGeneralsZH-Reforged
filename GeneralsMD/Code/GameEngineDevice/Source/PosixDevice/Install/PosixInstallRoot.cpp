@@ -40,7 +40,7 @@ const char ZERO_HOUR_ARCHIVE[] = "INIZH.big";
 const char BASE_GAME_ARCHIVE[] = "Textures.big";
 
 // Win32BIGFileSystem::init's places for the base game, relative to the Zero Hour folder.
-const char *const BASE_GAME_FOLDERS[] = { "", "ZH_Generals", "../Command & Conquer Generals",
+const char *const BASE_GAME_FOLDERS[] = { "", "ZH_Generals", "z_generals", "../Command & Conquer Generals",
 	"../Command & Conquer(tm) Generals" };
 const char FIRST_DECADE_GENERALS_FOLDER[] = "Command & Conquer(tm) Generals";
 
