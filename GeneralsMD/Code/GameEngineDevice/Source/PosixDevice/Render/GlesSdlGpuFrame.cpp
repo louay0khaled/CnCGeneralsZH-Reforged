@@ -653,14 +653,22 @@ SdlGpuFrame *SdlGpuFrame::Create(RenderWindow window, unsigned int width, unsign
     SDL_GLContext context = SDL_GL_CreateContext((SDL_Window *)window);
     if (context == NULL) {
 #if defined(__ANDROID__)
-        appendAndroidDiagnostic( std::string("SDL_GL_CreateContext failed: ") + SDL_GetError() );
+        {
+            char diagnostic[512];
+            snprintf(diagnostic, sizeof(diagnostic), "SDL_GL_CreateContext failed: %s", SDL_GetError());
+            appendAndroidDiagnostic(diagnostic);
+        }
 #endif
         error = std::string("OpenGL ES context: ") + SDL_GetError();
         return NULL;
     }
     if (SDL_GL_MakeCurrent((SDL_Window *)window, context) != 0) {
 #if defined(__ANDROID__)
-        appendAndroidDiagnostic( std::string("SDL_GL_MakeCurrent failed: ") + SDL_GetError() );
+        {
+            char diagnostic[512];
+            snprintf(diagnostic, sizeof(diagnostic), "SDL_GL_MakeCurrent failed: %s", SDL_GetError());
+            appendAndroidDiagnostic(diagnostic);
+        }
 #endif
         error = std::string("OpenGL ES make-current: ") + SDL_GetError();
         SDL_GL_DestroyContext(context);

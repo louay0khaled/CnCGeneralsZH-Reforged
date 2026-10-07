@@ -69,6 +69,7 @@
 #include <string.h>
 #include <time.h>
 #include <unistd.h>
+#include <sys/stat.h>
 
 #if defined(__APPLE__)
 #include <mach-o/dyld.h>
@@ -662,7 +663,7 @@ void handleTerminate( void )
 	abort();
 }
 
-}} // namespace
+} // namespace
 
 #if defined(__ANDROID__)
 void appendAndroidDiagnostic( const char *message )

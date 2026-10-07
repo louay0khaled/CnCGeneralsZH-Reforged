@@ -197,7 +197,11 @@ void SdlGameEngine::createWindow( void )
 	if (!SDL_Init( SDL_INIT_VIDEO ))
 	{
 #if defined(__ANDROID__)
-		appendAndroidDiagnostic( std::string("SDL_Init failed: ") + SDL_GetError() );
+		{
+			char diagnostic[512];
+			snprintf(diagnostic, sizeof(diagnostic), "SDL_Init failed: %s", SDL_GetError());
+			appendAndroidDiagnostic(diagnostic);
+		}
 #endif
 		char why[ 512 ];
 		snprintf( why, sizeof( why ), "SDL could not start its video subsystem: %s", SDL_GetError() );
@@ -240,7 +244,11 @@ void SdlGameEngine::createWindow( void )
 	if (m_window == NULL)
 	{
 #if defined(__ANDROID__)
-		appendAndroidDiagnostic( std::string("SDL_CreateWindow failed: ") + SDL_GetError() );
+		{
+			char diagnostic[512];
+			snprintf(diagnostic, sizeof(diagnostic), "SDL_CreateWindow failed: %s", SDL_GetError());
+			appendAndroidDiagnostic(diagnostic);
+		}
 #endif
 		char why[ 512 ];
 		snprintf( why, sizeof( why ), "SDL could not create the game's window: %s", SDL_GetError() );
