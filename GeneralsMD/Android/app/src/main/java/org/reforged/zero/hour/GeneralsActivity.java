@@ -26,7 +26,10 @@ public final class GeneralsActivity extends SDLActivity {
     }
 
     private void writeJavaCrashReport(Thread thread, Throwable throwable) {
-        File logs = new File(new File(getFilesDir(), "ZeroHourData"), "Logs");
+        File external = getExternalFilesDir(null);
+        File logs = external != null
+                ? new File(external, "ZeroHourData/Logs")
+                : new File(new File(getFilesDir(), "ZeroHourData"), "Logs");
         if (!logs.isDirectory()) logs.mkdirs();
 
         StringWriter stack = new StringWriter();

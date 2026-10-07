@@ -63,7 +63,13 @@ public final class SetupActivity extends Activity {
         if (permissionScreenOpen && hasDirectFileAccess()) {
             permissionScreenOpen = false;
             openPicker();
+            return;
         }
+
+        // The game runs in :game. When that process dies, this launcher process resumes.
+        // Check the shared app-specific diagnostics directory automatically.
+        new android.os.Handler(getMainLooper()).postDelayed(
+                () -> showNativeDiagnosticsIfPresent(true), 120);
     }
 
     private File stateDir() {
@@ -810,37 +816,78 @@ public final class SetupActivity extends Activity {
         }
     }
 
+    /*
+     * Native and Java diagnostics share one normal app-specific external directory:
+     * <external-files>/ZeroHourData/Logs
+     *
+     * The regular device path is:
+     * /storage/emulated/0/Android/data/com.louay.generalszh/files/ZeroHourData/Logs
+     *
+     * No broad storage write permission is required for this app-owned directory.
+     * Legacy locations are also checked so reports from older builds are not lost.
+     */
+    private File appExternalRoot() {
+        return getExternalFilesDir(null);
+    }
+
     private File nativeLogsDir() {
+        File external = appExternalRoot();
+        return external == null ? null : new File(external, "ZeroHourData/Logs");
+    }
+
+    private File legacyInternalLogsDir() {
         return new File(new File(getFilesDir(), "ZeroHourData"), "Logs");
     }
 
+    private File legacyMalformedLogsDir() {
+        File external = appExternalRoot();
+        return external == null ? null : new File(external, "ZeroHourData\\Logs");
+    }
+
     private File nativeCrashFile() {
-        return new File(nativeLogsDir(), "ReleaseCrashInfo.txt");
+        File dir = nativeLogsDir();
+        return dir == null ? null : new File(dir, "ReleaseCrashInfo.txt");
     }
 
     private File nativeDebugFile() {
-        return new File(nativeLogsDir(), "DebugLogFile.txt");
+        File dir = nativeLogsDir();
+        return dir == null ? null : new File(dir, "DebugLogFile.txt");
+    }
+
+    private File nativeStartupFile() {
+        File dir = nativeLogsDir();
+        return dir == null ? null : new File(dir, "NativeStartupLog.txt");
     }
 
     private File nativeDiagnosticsSeenFile() {
-        return new File(getFilesDir(), NATIVE_DIAGNOSTICS_SEEN);
+        File external = appExternalRoot();
+        return external == null ? new File(getFilesDir(), NATIVE_DIAGNOSTICS_SEEN)
+                : new File(external, NATIVE_DIAGNOSTICS_SEEN);
     }
 
     private File gameRunPendingFile() {
-        return new File(getFilesDir(), GAME_RUN_PENDING);
+        File external = appExternalRoot();
+        return external == null ? new File(getFilesDir(), GAME_RUN_PENDING)
+                : new File(external, GAME_RUN_PENDING);
     }
 
     private void prepareGameRunDiagnostics() {
         File logs = nativeLogsDir();
-        if (!logs.isDirectory()) logs.mkdirs();
-        new File(logs, "ReleaseCrashInfo.txt").delete();
-        new File(logs, "ReleaseCrashInfoPrev.txt").delete();
-        new File(logs, "DebugLogFile.txt").delete();
-        new File(logs, "JavaCrashInfo.txt").delete();
-        try (FileOutputStream out = new FileOutputStream(gameRunPendingFile(), false)) {
-            out.write(Long.toString(System.currentTimeMillis()).getBytes(StandardCharsets.UTF_8));
-            out.flush();
-            out.getFD().sync();
+        if (logs != null && !logs.isDirectory()) logs.mkdirs();
+
+        // Keep native reports. The native side rotates current files during startup/crash.
+        File javaCrash = logs == null ? null : new File(logs, "JavaCrashInfo.txt");
+        if (javaCrash != null) javaCrash.delete();
+
+        try {
+            File pending = gameRunPendingFile();
+            File parent = pending.getParentFile();
+            if (parent != null && !parent.isDirectory()) parent.mkdirs();
+            try (FileOutputStream out = new FileOutputStream(pending, false)) {
+                out.write(Long.toString(System.currentTimeMillis()).getBytes(StandardCharsets.UTF_8));
+                out.flush();
+                out.getFD().sync();
+            }
         } catch (Exception ignored) {}
     }
 
@@ -848,24 +895,33 @@ public final class SetupActivity extends Activity {
         File file = nativeDiagnosticsSeenFile();
         if (!file.isFile()) return 0L;
         try {
-            return Long.parseLong(new String(java.nio.file.Files.readAllBytes(file.toPath()), StandardCharsets.UTF_8).trim());
+            return Long.parseLong(new String(
+                    java.nio.file.Files.readAllBytes(file.toPath()),
+                    StandardCharsets.UTF_8).trim());
         } catch (Exception e) {
             return 0L;
         }
     }
 
     private void markDiagnosticsSeen(long timestamp) {
-        try (FileOutputStream out = new FileOutputStream(nativeDiagnosticsSeenFile(), false)) {
-            out.write(Long.toString(timestamp).getBytes(StandardCharsets.UTF_8));
-            out.flush();
-            out.getFD().sync();
+        try {
+            File file = nativeDiagnosticsSeenFile();
+            File parent = file.getParentFile();
+            if (parent != null && !parent.isDirectory()) parent.mkdirs();
+            try (FileOutputStream out = new FileOutputStream(file, false)) {
+                out.write(Long.toString(timestamp).getBytes(StandardCharsets.UTF_8));
+                out.flush();
+                out.getFD().sync();
+            }
         } catch (Exception ignored) {}
     }
 
     private String readTail(File file, int maxChars) {
         if (file == null || !file.isFile()) return "";
         try {
-            String text = new String(java.nio.file.Files.readAllBytes(file.toPath()), StandardCharsets.UTF_8);
+            String text = new String(
+                    java.nio.file.Files.readAllBytes(file.toPath()),
+                    StandardCharsets.UTF_8);
             if (text.length() <= maxChars) return text;
             return "…\n" + text.substring(text.length() - maxChars);
         } catch (Exception e) {
@@ -873,57 +929,100 @@ public final class SetupActivity extends Activity {
         }
     }
 
-    /**
-     * Native code writes ReleaseCrashInfo.txt and DebugLogFile.txt under app-private storage.
-     * Surface the newest report after a failed run so a native crash is not silently invisible.
-     */
-    private boolean showNativeDiagnosticsIfPresent() {
-        File crash = nativeCrashFile();
-        File debug = nativeDebugFile();
-        File javaCrash = new File(nativeLogsDir(), "JavaCrashInfo.txt");
-        long crashTime = crash.isFile() ? crash.lastModified() : 0L;
-        long debugTime = debug.isFile() ? debug.lastModified() : 0L;
-        long javaCrashTime = javaCrash.isFile() ? javaCrash.lastModified() : 0L;
-        long latest = Math.max(crashTime, Math.max(debugTime, javaCrashTime));
+    private long lastModified(File file) {
+        return file != null && file.isFile() ? file.lastModified() : 0L;
+    }
 
-        File pendingFile = gameRunPendingFile();
-        if (!pendingFile.isFile()) return false;
-        long pending = 0L;
-        try {
-            pending = Long.parseLong(new String(
-                    java.nio.file.Files.readAllBytes(pendingFile.toPath()),
-                    StandardCharsets.UTF_8).trim());
-        } catch (Exception ignored) {}
-        if (pending <= 0L || latest <= pending || latest <= readDiagnosticsSeen()) return false;
+    /*
+     * Find diagnostics in all current/legacy locations.
+     * requireNew=true is used automatically when returning from :game.
+     * requireNew=false is used by Tools and always shows the newest available report.
+     */
+    private boolean showNativeDiagnosticsIfPresent(boolean requireNew) {
+        File currentLogs = nativeLogsDir();
+        File legacyInternal = legacyInternalLogsDir();
+        File legacyMalformed = legacyMalformedLogsDir();
+
+        File crash = currentLogs == null ? null : new File(currentLogs, "ReleaseCrashInfo.txt");
+        File crashPrev = currentLogs == null ? null : new File(currentLogs, "ReleaseCrashInfoPrev.txt");
+        File debug = currentLogs == null ? null : new File(currentLogs, "DebugLogFile.txt");
+        File debugPrev = currentLogs == null ? null : new File(currentLogs, "DebugLogFilePrev.txt");
+        File startup = currentLogs == null ? null : new File(currentLogs, "NativeStartupLog.txt");
+        File javaCrash = currentLogs == null ? null : new File(currentLogs, "JavaCrashInfo.txt");
+
+        File legacyCrash = new File(legacyInternal, "ReleaseCrashInfo.txt");
+        File legacyDebug = new File(legacyInternal, "DebugLogFile.txt");
+        File malformedDebug = legacyMalformed == null ? null : new File(legacyMalformed, "DebugLogFile.txt");
+
+        // One older build placed the native crash report directly in ZeroHourData.
+        File oldRootCrash = new File(new File(getFilesDir(), "ZeroHourData"), "ReleaseCrashInfo.txt");
+
+        File newestCrash = lastModified(crash) >= lastModified(legacyCrash) ? crash : legacyCrash;
+        if (lastModified(oldRootCrash) > lastModified(newestCrash)) newestCrash = oldRootCrash;
+        File newestDebug = lastModified(debug) >= Math.max(lastModified(legacyDebug), lastModified(malformedDebug))
+                ? debug
+                : (lastModified(legacyDebug) >= lastModified(malformedDebug) ? legacyDebug : malformedDebug);
+
+        long crashTime = Math.max(lastModified(newestCrash), lastModified(crashPrev));
+        long debugTime = Math.max(lastModified(newestDebug), lastModified(debugPrev));
+        long startupTime = lastModified(startup);
+        long javaCrashTime = lastModified(javaCrash);
+        long latest = Math.max(Math.max(crashTime, debugTime), Math.max(startupTime, javaCrashTime));
+
+        if (latest <= 0L) return false;
+
+        if (requireNew) {
+            File pendingFile = gameRunPendingFile();
+            if (!pendingFile.isFile()) return false;
+
+            long pending = 0L;
+            try {
+                pending = Long.parseLong(new String(
+                        java.nio.file.Files.readAllBytes(pendingFile.toPath()),
+                        StandardCharsets.UTF_8).trim());
+            } catch (Exception ignored) {}
+
+            if (pending <= 0L || latest <= pending || latest <= readDiagnosticsSeen()) return false;
+        }
 
         StringBuilder body = new StringBuilder();
-        if (crashTime > 0L) {
-            body.append("CRASH REPORT\n");
-            body.append(readTail(crash, 7000));
-            body.append("\n\n");
+        body.append("مجلد السجلات:\n");
+        if (currentLogs != null) body.append(currentLogs.getAbsolutePath()).append("\n");
+        body.append("\n");
+
+        if (startupTime > 0L) {
+            body.append("===== NATIVE STARTUP TRACE =====\n");
+            body.append(readTail(startup, 7000)).append("\n\n");
         }
-        if (debugTime > 0L) {
-            body.append("DEBUG LOG (tail)\n");
-            body.append(readTail(debug, 5000));
+        if (crashTime > 0L && newestCrash != null) {
+            body.append("===== NATIVE CRASH REPORT =====\n");
+            body.append(newestCrash.getAbsolutePath()).append("\n");
+            body.append(readTail(newestCrash, 8500)).append("\n\n");
+        }
+        if (debugTime > 0L && newestDebug != null) {
+            body.append("===== DEBUG LOG =====\n");
+            body.append(newestDebug.getAbsolutePath()).append("\n");
+            body.append(readTail(newestDebug, 5500)).append("\n\n");
         }
         if (javaCrashTime > 0L) {
-            if (body.length() > 0) body.append("\n\n");
-            body.append("JAVA CRASH\n");
-            body.append(readTail(javaCrash, 7000));
+            body.append("===== JAVA CRASH =====\n");
+            body.append(javaCrash.getAbsolutePath()).append("\n");
+            body.append(readTail(javaCrash, 6000)).append("\n");
         }
 
         final String report = body.toString();
         markDiagnosticsSeen(latest);
-        pendingFile.delete();
+        gameRunPendingFile().delete();
 
         new AlertDialog.Builder(this)
-                .setTitle("تشخيص آخر تشغيل")
+                .setTitle(requireNew ? "تشخيص انهيار اللعبة" : "آخر سجل تشغيل")
                 .setMessage(report)
                 .setNeutralButton("نسخ السجل", (d, w) -> {
                     android.content.ClipboardManager clipboard =
                             (android.content.ClipboardManager) getSystemService(CLIPBOARD_SERVICE);
                     if (clipboard != null) {
-                        clipboard.setPrimaryClip(android.content.ClipData.newPlainText("Zero Hour diagnostics", report));
+                        clipboard.setPrimaryClip(
+                                android.content.ClipData.newPlainText("Zero Hour diagnostics", report));
                         Toast.makeText(this, "تم نسخ السجل.", Toast.LENGTH_SHORT).show();
                     }
                 })
@@ -934,17 +1033,8 @@ public final class SetupActivity extends Activity {
         return true;
     }
 
-    private void launchGame() {
-        String root = savedRoot();
-        if (root == null || !inspect(new File(root)).complete()) {
-            Toast.makeText(this, "لا يمكن تشغيل اللعبة قبل اكتمال ملفات Zero Hour.",
-                    Toast.LENGTH_LONG).show();
-            return;
-        }
-        prepareGameRunDiagnostics();
-        startActivity(new Intent(this, GeneralsActivity.class));
-        // Do not finish this Activity. GeneralsActivity runs in the isolated :game
-        // process, so this launcher remains alive underneath it after a native crash.
+    private boolean showNativeDiagnosticsIfPresent() {
+        return showNativeDiagnosticsIfPresent(false);
     }
 
     private void showError(String message) {

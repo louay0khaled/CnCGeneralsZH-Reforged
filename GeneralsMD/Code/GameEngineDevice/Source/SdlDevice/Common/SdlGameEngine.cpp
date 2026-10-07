@@ -27,6 +27,7 @@
 #include "GameLogic/GameLogic.h"
 #include "SdlDevice/Common/SdlDisplays.h"
 #include "SdlDevice/Common/SdlGameEngine.h"
+#include "Common/CrashHandler.h"
 #include "SdlDevice/Common/SdlMessageBox.h"
 #include "SdlDevice/GameClient/SdlInput.h"
 #include "SdlDevice/GameClient/TouchInput.h"
@@ -152,8 +153,17 @@ SdlGameEngine::~SdlGameEngine()
 // GameMain calls init( argc, argv ); the argument-less init is empty in GameEngine and nothing calls it.
 void SdlGameEngine::init( int argc, char *argv[] )
 {
+#if defined(__ANDROID__)
+	appendAndroidDiagnostic( "SdlGameEngine::init entered" );
+#endif
 	createWindow();
+#if defined(__ANDROID__)
+	appendAndroidDiagnostic( "SDL game window creation returned" );
+#endif
 	GameEngine::init( argc, argv );
+#if defined(__ANDROID__)
+	appendAndroidDiagnostic( "GameEngine::init returned" );
+#endif
 
 	// P1 step 3: "-dumpFileResolution <file>" writes where every path resolves, then ends the run
 	// (test_packaging_resolution compares two layouts' dumps).  A test switch, never a player's.
@@ -186,12 +196,18 @@ void SdlGameEngine::createWindow( void )
 
 	if (!SDL_Init( SDL_INIT_VIDEO ))
 	{
+#if defined(__ANDROID__)
+		appendAndroidDiagnostic( std::string("SDL_Init failed: ") + SDL_GetError() );
+#endif
 		char why[ 512 ];
 		snprintf( why, sizeof( why ), "SDL could not start its video subsystem: %s", SDL_GetError() );
 		RELEASE_CRASH( why );
 		return;
 	}
 	m_sdlVideoStarted = TRUE;
+#if defined(__ANDROID__)
+	appendAndroidDiagnostic( "SDL video subsystem initialized" );
+#endif
 	ThePlatformDisplays = &TheSdlDisplays;		// Monitors.h answers from SDL's displays from here on
 
 	/* The window's drawable in pixels, not points.  The game's sizes are pixels (SdlDisplays.h), and without
@@ -223,6 +239,9 @@ void SdlGameEngine::createWindow( void )
 	m_window = SDL_CreateWindow( "Command and Conquer Generals Zero Hour", width, height, flags );
 	if (m_window == NULL)
 	{
+#if defined(__ANDROID__)
+		appendAndroidDiagnostic( std::string("SDL_CreateWindow failed: ") + SDL_GetError() );
+#endif
 		char why[ 512 ];
 		snprintf( why, sizeof( why ), "SDL could not create the game's window: %s", SDL_GetError() );
 		RELEASE_CRASH( why );
@@ -231,6 +250,9 @@ void SdlGameEngine::createWindow( void )
 	DEBUG_LOG(( "SdlGameEngine: window %dx%d, %s%s%s\n", width, height,
 		m_request.windowed ? "windowed" : "fullscreen", m_request.borderless ? ", borderless" : "",
 		m_request.hidden ? ", hidden" : "" ));
+#if defined(__ANDROID__)
+	appendAndroidDiagnostic( "SDL game window created successfully" );
+#endif
 
 	s_titledWindow = m_window;
 	TheApplicationWindowTitleHook = setTitleOfWindow;

@@ -46,6 +46,9 @@ void installThreadCrashStack( void );
 	* log is closed.  Debug.cpp calls it. */
 void setCrashLogDescriptor( int fd );
 
+/** Appends one normal, non-signal-handler line to Android startup diagnostics. */
+void appendAndroidDiagnostic( const char *message );
+
 #endif
 
 #endif // __CRASHHANDLER_H_

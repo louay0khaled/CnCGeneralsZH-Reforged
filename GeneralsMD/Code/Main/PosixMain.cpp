@@ -168,30 +168,77 @@ static void activateThisApp() {}
 #endif
 
 #if defined(__ANDROID__)
-/** Put all native diagnostics/settings under app-private storage before the crash handler and
- * DEBUG_INIT run. Android's installed .so directory is read-only, so desktop user-data discovery
- * must be given an explicit writable root. */
+/*
+ * Select the normal app-specific external-files directory. This matches Java's
+ * Context.getExternalFilesDir(null).
+ *
+ * ZH_USER_DATA_DIR feeds normal engine saves/settings. ZH_ANDROID_DIAGNOSTICS_DIR is a
+ * separate true-POSIX path for Debug.cpp, crash reports, and the startup trace.
+ */
 static void configureAndroidUserDataDirectory()
 {
+	static bool configured = false;
+	if (configured)
+		return;
+
+	const char *external = SDL_GetAndroidExternalStoragePath();
 	const char *internal = SDL_GetAndroidInternalStoragePath();
-	if (internal == NULL || internal[0] == '\0')
+	const char *base = (external != NULL && external[0] != '\0') ? external : internal;
+	if (base == NULL || base[0] == '\0')
 	{
-		fprintf( stderr, "WARNING: Android internal storage path is unavailable; native diagnostics may be lost.\n" );
+		fprintf( stderr, "WARNING: Android app storage path is unavailable; native diagnostics may be lost.\\n" );
 		return;
 	}
 
 	static char userData[ PATH_MAX ];
-	const int written = snprintf( userData, sizeof( userData ), "%s/ZeroHourData", internal );
-	if (written <= 0 || written >= (int)sizeof( userData ))
+	static char diagnostics[ PATH_MAX ];
+	const int userWritten = snprintf( userData, sizeof( userData ), "%s/ZeroHourData", base );
+	const int logWritten = snprintf( diagnostics, sizeof( diagnostics ), "%s/Logs", userData );
+	if (userWritten <= 0 || userWritten >= (int)sizeof( userData) ||
+			logWritten <= 0 || logWritten >= (int)sizeof( diagnostics))
 	{
-		fprintf( stderr, "WARNING: Android user-data path is too long; native diagnostics may be lost.\n" );
+		fprintf( stderr, "WARNING: Android user-data path is too long; native diagnostics may be lost.\\n" );
 		return;
 	}
 
-	if (setenv( "ZH_USER_DATA_DIR", userData, 1 ) != 0)
-		fprintf( stderr, "WARNING: could not set ZH_USER_DATA_DIR=%s\n", userData );
-	else
-		fprintf( stderr, "INFO: Android native user-data directory: %s\n", userData );
+	if (mkdir( userData, 0777 ) != 0 && errno != EEXIST)
+	{
+		fprintf( stderr, "WARNING: could not create Android user-data directory %s: %s\\n",
+			userData, strerror( errno) );
+		return;
+	}
+	if (mkdir( diagnostics, 0777 ) != 0 && errno != EEXIST)
+	{
+		fprintf( stderr, "WARNING: could not create Android diagnostics directory %s: %s\\n",
+			diagnostics, strerror( errno) );
+		return;
+	}
+
+	if (setenv( "ZH_USER_DATA_DIR", userData, 1 ) != 0 ||
+			setenv( "ZH_ANDROID_DIAGNOSTICS_DIR", diagnostics, 1 ) != 0)
+	{
+		fprintf( stderr, "WARNING: could not configure Android writable paths.\\n" );
+		return;
+	}
+
+	char startup[ PATH_MAX ];
+	char startupPrev[ PATH_MAX ];
+	snprintf( startup, sizeof( startup ), "%s/NativeStartupLog.txt", diagnostics );
+	snprintf( startupPrev, sizeof( startupPrev ), "%s/NativeStartupLogPrev.txt", diagnostics );
+	unlink( startupPrev );
+	rename( startup, startupPrev );
+
+	configured = true;
+	appendAndroidDiagnostic( "Android writable storage configured" );
+	fprintf( stderr, "INFO: Android writable user-data directory: %s\\n", userData );
+	fprintf( stderr, "INFO: Android diagnostics directory: %s\\n", diagnostics );
+}
+
+__attribute__((constructor(101))) static void androidEarlyBootstrap()
+{
+	configureAndroidUserDataDirectory();
+	installCrashHandlers();
+	appendAndroidDiagnostic( "Android early bootstrap completed" );
 }
 #endif
 
@@ -563,14 +610,15 @@ static Bool takeOneCopyLock( void )
 int main( int argc, char *argv[] )
 {
 #if defined(__ANDROID__)
-	// Configure writable app-private diagnostics before installCrashHandlers(): even a crash this early
-	// must land somewhere the Android UI can read on the next launch.
+	// androidEarlyBootstrap already ran before ordinary constructors; this call is idempotent.
 	configureAndroidUserDataDirectory();
+	appendAndroidDiagnostic( "main() entered" );
 #endif
 
-	// Before anything else, and before another thread exists: a crash from here on leaves
-	// ReleaseCrashInfo.txt, as WinMain's _set_se_translator and SetUnhandledExceptionFilter make it on Windows.
 	installCrashHandlers();
+#if defined(__ANDROID__)
+	appendAndroidDiagnostic( "signal crash handlers installed" );
+#endif
 
 	// The one locale category the game may set (a port rule; C2): dates in the replay and save
 	// lists in the user's format.  LC_NUMERIC would change how the INI parser reads decimals.
@@ -595,6 +643,9 @@ int main( int argc, char *argv[] )
 			fprintf( stderr, "generals: cannot use '%s' as the install root: %s\n", root, strerror( errno ) );
 			return 1;
 		}
+#if defined(__ANDROID__)
+		appendAndroidDiagnostic( "install root selected and chdir succeeded" );
+#endif
 
 #if defined(__ANDROID__)
 		// Android has two physical asset roots in the supported Steam layout:
@@ -668,6 +719,9 @@ int main( int argc, char *argv[] )
 		fprintf(stderr, "INFO: Android Zero Hour root: %s\n", root);
 #endif
 		PosixPath_Set_Overlays( overlays );
+#if defined(__ANDROID__)
+		appendAndroidDiagnostic( "file overlays configured" );
+#endif
 		for (size_t i = 0; i < overlays.size(); ++i)
 			fprintf( stderr, "generals: overlay %s, searched before the install\n", overlays[i].c_str() );
 		// The roots are read-only (P1 step 2): nothing the engine addresses relative to the install, the
@@ -749,7 +803,13 @@ int main( int argc, char *argv[] )
 
 		// start the log
 		DEBUG_INIT(DEBUG_FLAGS_DEFAULT);
+#if defined(__ANDROID__)
+		appendAndroidDiagnostic( "DEBUG_INIT completed" );
+#endif
 		initMemoryManager();
+#if defined(__ANDROID__)
+		appendAndroidDiagnostic( "memory manager initialized" );
+#endif
 
 		// Set up version info
 		TheVersion = NEW Version;
@@ -774,7 +834,13 @@ int main( int argc, char *argv[] )
 		DEBUG_LOG(("CRC message is %d\n", GameMessage::MSG_LOGIC_CRC));
 
 		// run the game main loop
+#if defined(__ANDROID__)
+		appendAndroidDiagnostic( "entering GameMain" );
+#endif
 		GameMain(argc, argv);
+#if defined(__ANDROID__)
+		appendAndroidDiagnostic( "GameMain returned normally" );
+#endif
 		SdlGameEngine_releaseWindow();		// after the engine, as WinMain's DestroyWindow
 
 		delete TheVersion;

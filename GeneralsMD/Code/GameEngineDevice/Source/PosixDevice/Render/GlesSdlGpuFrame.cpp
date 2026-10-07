@@ -7,6 +7,7 @@
 */
 
 #include "SdlGpuFrame.h"
+#include "Common/CrashHandler.h"
 #include "GlesRenderCommon.h"
 
 #include <SDL3/SDL.h>
@@ -632,6 +633,11 @@ SdlGpuFrame::SdlGpuFrame() :
 SdlGpuFrame *SdlGpuFrame::Create(RenderWindow window, unsigned int width, unsigned int height, std::string &error)
 {
     error.clear();
+#if defined(__ANDROID__)
+    char stage[256];
+    snprintf(stage, sizeof(stage), "GLES Create entered: %ux%u", width, height);
+    appendAndroidDiagnostic(stage);
+#endif
     if (window == NULL) {
         error = "Android GLES requires a window";
         return NULL;
@@ -646,10 +652,16 @@ SdlGpuFrame *SdlGpuFrame::Create(RenderWindow window, unsigned int width, unsign
 
     SDL_GLContext context = SDL_GL_CreateContext((SDL_Window *)window);
     if (context == NULL) {
+#if defined(__ANDROID__)
+        appendAndroidDiagnostic( std::string("SDL_GL_CreateContext failed: ") + SDL_GetError() );
+#endif
         error = std::string("OpenGL ES context: ") + SDL_GetError();
         return NULL;
     }
     if (SDL_GL_MakeCurrent((SDL_Window *)window, context) != 0) {
+#if defined(__ANDROID__)
+        appendAndroidDiagnostic( std::string("SDL_GL_MakeCurrent failed: ") + SDL_GetError() );
+#endif
         error = std::string("OpenGL ES make-current: ") + SDL_GetError();
         SDL_GL_DestroyContext(context);
         return NULL;
@@ -657,6 +669,14 @@ SdlGpuFrame *SdlGpuFrame::Create(RenderWindow window, unsigned int width, unsign
 
     const char *version = (const char *)glGetString(GL_VERSION);
     const char *vendor = (const char *)glGetString(GL_VENDOR);
+#if defined(__ANDROID__)
+    {
+        char info[768];
+        snprintf(info, sizeof(info), "GLES context active: version=%s vendor=%s",
+            version != NULL ? version : "(null)", vendor != NULL ? vendor : "(null)");
+        appendAndroidDiagnostic(info);
+    }
+#endif
     if (version == NULL || strstr(version, "OpenGL ES 3.") != version) {
         error = "the device did not expose OpenGL ES 3.x";
         SDL_GL_DestroyContext(context);
@@ -673,6 +693,14 @@ SdlGpuFrame *SdlGpuFrame::Create(RenderWindow window, unsigned int width, unsign
     state->DrawableHeight = height;
     glGenFramebuffers(1, &state->TargetFbo);
     glGenBuffers(2, state->UniformBuffers);
+#if defined(__ANDROID__)
+    {
+        char info[256];
+        snprintf(info, sizeof(info), "GLES frame objects: fbo=%u ubo0=%u ubo1=%u",
+            (unsigned)state->TargetFbo, (unsigned)state->UniformBuffers[0], (unsigned)state->UniformBuffers[1]);
+        appendAndroidDiagnostic(info);
+    }
+#endif
     if (state->TargetFbo == 0 || state->UniformBuffers[0] == 0 || state->UniformBuffers[1] == 0) {
         error = "OpenGL ES could not create frame objects";
         if (state->UniformBuffers[0] != 0) glDeleteBuffers(2, state->UniformBuffers);
@@ -692,12 +720,22 @@ SdlGpuFrame *SdlGpuFrame::Create(RenderWindow window, unsigned int width, unsign
     frame->FlushLimit = 0;
 
     if (!frame->Create_Targets(width, height)) {
+#if defined(__ANDROID__)
+        appendAndroidDiagnostic( "GLES Create_Targets failed" );
+#endif
         error = "OpenGL ES could not create the back/depth targets";
         delete frame;
         return NULL;
     }
 
-    fprintf(stderr, "PosixDevice9: OpenGL ES %s / %s\\n", version, vendor != NULL ? vendor : "unknown vendor");
+    fprintf(stderr, "PosixDevice9: OpenGL ES %s / %s\n", version, vendor != NULL ? vendor : "unknown vendor");
+#if defined(__ANDROID__)
+    {
+        char info[256];
+        snprintf(info, sizeof(info), "GLES render targets created: %ux%u", width, height);
+        appendAndroidDiagnostic(info);
+    }
+#endif
     return frame;
 }
 

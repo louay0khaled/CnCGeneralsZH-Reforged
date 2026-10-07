@@ -662,7 +662,35 @@ void handleTerminate( void )
 	abort();
 }
 
-} // namespace
+}} // namespace
+
+#if defined(__ANDROID__)
+void appendAndroidDiagnostic( const char *message )
+{
+	const char *directory = getenv( "ZH_ANDROID_DIAGNOSTICS_DIR" );
+	if (directory == NULL || directory[0] == '\0' || message == NULL)
+		return;
+
+	char path[ 4096 ];
+	const int pathLength = snprintf( path, sizeof( path ), "%s/NativeStartupLog.txt", directory );
+	if (pathLength <= 0 || pathLength >= (int)sizeof( path ))
+		return;
+
+	const int fd = open( path, O_WRONLY | O_CREAT | O_APPEND, 0644 );
+	if (fd < 0)
+		return;
+
+	char line[ 4096 ];
+	const int lineLength = snprintf( line, sizeof( line ), "[%lld] %s\\n",
+		(long long)time( NULL ), message );
+	if (lineLength > 0)
+		(void)write( fd, line, (size_t)lineLength < sizeof( line ) ? (size_t)lineLength : sizeof( line ) - 1);
+	fsync( fd );
+	close( fd );
+}
+#else
+void appendAndroidDiagnostic( const char *) {}
+#endif
 
 //-------------------------------------------------------------------------------------------------
 // Install
@@ -693,14 +721,25 @@ void installCrashHandlers( void )
 	s_installed = true;
 	s_mainThread = pthread_self();
 
-	// The crash file's path: the user data folder, which findUserDataDirectory spells the engine's way,
-	// with a separator at the end - a real POSIX directory otherwise.
+	// Android has one explicit, normal app-specific diagnostics directory shared with Java.
+	// Never derive it from findUserDataDirectory() because that API deliberately returns an
+	// engine-style trailing '\\' separator on POSIX.
 	char folder[ 4096 ];
 	s_crashPath[0] = s_previousPath[0] = 0;
+#if defined(__ANDROID__)
+	const char *androidLogs = getenv( "ZH_ANDROID_DIAGNOSTICS_DIR" );
+	if (androidLogs != NULL && androidLogs[0] != '\0')
+	{
+		if (snprintf( folder, sizeof( folder ), "%s", androidLogs ) > 0)
+			mkdir( folder, 0777 );
+	}
+	else if (findUserDataDirectory( folder, sizeof( folder ) ))
+#else
 	if (findUserDataDirectory( folder, sizeof( folder ) ))
+#endif
 	{
 		size_t length = strlen( folder );
-		if (length > 0 && (folder[ length - 1 ] == '\\' || folder[ length - 1 ] == '/'))
+		while (length > 0 && (folder[ length - 1 ] == '\\' || folder[ length - 1 ] == '/' ))
 			folder[ --length ] = 0;
 		snprintf( s_crashPath, sizeof( s_crashPath ), "%s/ReleaseCrashInfo.txt", folder );
 		snprintf( s_previousPath, sizeof( s_previousPath ), "%s/ReleaseCrashInfoPrev.txt", folder );
