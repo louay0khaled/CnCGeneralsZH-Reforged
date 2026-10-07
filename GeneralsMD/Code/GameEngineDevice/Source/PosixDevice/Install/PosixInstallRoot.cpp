@@ -214,8 +214,8 @@ std::string PosixInstallCheckMessage( PosixInstallCheck check, const std::string
 			return "\"" + folder + "\" holds Zero Hour, but not the original Command & Conquer Generals it needs: "
 				"its Textures.big is not there, in a ZH_Generals folder inside it, or in a \"Command & Conquer "
 				"Generals\" folder beside it.\n\n"
-				"Copy Generals' .big files into a folder named ZH_Generals inside the Zero Hour folder, then choose "
-				"the Zero Hour folder again.";
+				"Steam/EA installs may keep the original Generals inside a ZH_Generals or z_generals subfolder; "
+				"the checker searches those layouts automatically, so no files need to be moved.";
 		case INSTALL_INSIDE_THE_APP:
 			return "\"" + folder + "\" is inside the game's own app. Choose the folder your copy of Zero Hour is "
 				"installed in.";
