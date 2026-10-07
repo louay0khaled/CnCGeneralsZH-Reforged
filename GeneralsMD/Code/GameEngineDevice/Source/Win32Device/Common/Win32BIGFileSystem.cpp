@@ -105,8 +105,8 @@ Bool Win32BIGFileSystem::loadBaseGameArchivesFromPath(const AsciiString &path)
 	if (path.isEmpty() || !holdsBaseGameArchives(path.str()))
 		return FALSE;
 
-	DEBUG_LOG(("Win32BIGFileSystem::init - loading base Generals archives from '%s'\\n", path.str()));
-	fprintf(stderr, "INFO: Mounting Base Generals archives from: %s\\n", path.str());
+	DEBUG_LOG(("Win32BIGFileSystem::init - loading base Generals archives from '%s'\n", path.str()));
+	fprintf(stderr, "INFO: Mounting Base Generals archives from: %s\n", path.str());
 
 #if defined(__ANDROID__)
 	if (path.str()[0] == '/')
@@ -114,7 +114,7 @@ Bool Win32BIGFileSystem::loadBaseGameArchivesFromPath(const AsciiString &path)
 		DIR *dir = opendir(path.str());
 		if (dir == NULL)
 		{
-			fprintf(stderr, "ERROR: Android cannot open Base Generals directory: %s (%s)\\n",
+			fprintf(stderr, "ERROR: Android cannot open Base Generals directory: %s (%s)\n",
 				path.str(), strerror(errno));
 			return FALSE;
 		}
@@ -144,14 +144,14 @@ Bool Win32BIGFileSystem::loadBaseGameArchivesFromPath(const AsciiString &path)
 			ArchiveFile *archiveFile = openArchiveFile(archivePath.str());
 			if (archiveFile == NULL)
 			{
-				fprintf(stderr, "WARNING: Android failed to open Base Generals archive: %s\\n",
+				fprintf(stderr, "WARNING: Android failed to open Base Generals archive: %s\n",
 					archivePath.str());
 				continue;
 			}
 
-			DEBUG_LOG(("Android Base Generals: loading %s into the directory tree.\\n",
+			DEBUG_LOG(("Android Base Generals: loading %s into the directory tree.\n",
 				archivePath.str()));
-			fprintf(stderr, "INFO: Android mounted Base Generals archive: %s (%lld bytes)\\n",
+			fprintf(stderr, "INFO: Android mounted Base Generals archive: %s (%lld bytes)\n",
 				archivePath.str(), (long long)status.st_size);
 			loadIntoDirectoryTree(archiveFile, archivePath, FALSE);
 			++loaded;
@@ -159,7 +159,7 @@ Bool Win32BIGFileSystem::loadBaseGameArchivesFromPath(const AsciiString &path)
 		}
 
 		closedir(dir);
-		fprintf(stderr, "INFO: Android Base Generals physical mount scan: %u .big candidates, %u mounted\\n",
+		fprintf(stderr, "INFO: Android Base Generals physical mount scan: %u .big candidates, %u mounted\n",
 			candidates, loaded);
 		return actuallyAdded;
 	}
@@ -168,9 +168,9 @@ Bool Win32BIGFileSystem::loadBaseGameArchivesFromPath(const AsciiString &path)
 	const Bool loaded = loadBigFilesFromDirectory(path, "*.big", FALSE, FALSE);
 	if (!loaded)
 	{
-		DEBUG_LOG(("Win32BIGFileSystem::init - Textures.big exists in '%s', but no readable BIG archive was mounted\\n",
+		DEBUG_LOG(("Win32BIGFileSystem::init - Textures.big exists in '%s', but no readable BIG archive was mounted\n",
 			path.str()));
-		fprintf(stderr, "WARNING: Textures.big exists but no Base Generals BIG archive was mounted from: %s\\n",
+		fprintf(stderr, "WARNING: Textures.big exists but no Base Generals BIG archive was mounted from: %s\n",
 			path.str());
 	}
 	return loaded;
