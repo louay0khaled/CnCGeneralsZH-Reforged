@@ -84,10 +84,33 @@ static Bool holdsBaseGameArchives(const char *directory)
 	AsciiString archive = directory;
 	if (!archive.isEmpty() && !archive.endsWith("\\") && !archive.endsWith("/"))
 	{
+#if defined(_WIN32)
 		archive.concat("\\");
+#else
+		archive.concat("/");
+#endif
 	}
 	archive.concat(BASE_GAME_ARCHIVE);
 	return TheLocalFileSystem->doesFileExist(archive.str());
+}
+
+static Bool loadBaseGameArchivesFromPath(const AsciiString &path)
+{
+	if (path.isEmpty() || !holdsBaseGameArchives(path.str()))
+		return FALSE;
+
+	DEBUG_LOG(("Win32BIGFileSystem::init - loading base Generals archives from '%s'\n", path.str()));
+	fprintf(stderr, "INFO: Mounting Base Generals archives from: %s\n", path.str());
+
+	const Bool loaded = loadBigFilesFromDirectory(path, "*.big", FALSE, FALSE);
+	if (!loaded)
+	{
+		DEBUG_LOG(("Win32BIGFileSystem::init - Textures.big exists in '%s', but no readable BIG archive was mounted\n",
+			path.str()));
+		fprintf(stderr, "WARNING: Textures.big exists but no Base Generals BIG archive was mounted from: %s\n",
+			path.str());
+	}
+	return loaded;
 }
 
 // The game starts without the base archives and then looks and sounds broken: magenta ground and
@@ -177,42 +200,81 @@ void Win32BIGFileSystem::init() {
     {
       AsciiString installPath;
 
-      // Android SetupActivity resolves the actual original-Generals folder
-      // once (for example ZH_Generals) and PosixMain exports it as
-      // CNC_GENERALS_PATH. Prefer that exact path before legacy registry /
-      // sibling-folder guessing, matching the MYSOREZ Android port.
-      const char *baseEnvValue = getenv("CNC_GENERALS_PATH");
-      if (baseEnvValue != NULL && baseEnvValue[0] != '\0' && holdsBaseGameArchives(baseEnvValue))
+#if defined(__ANDROID__)
+      // Android follows the Steam/EA layout directly:
+      //   <Zero Hour>/INIZH.big
+      //   <Zero Hour>/TexturesZH.big
+      //   <Zero Hour>/ZH_Generals/Textures.big
+      //
+      // Do not require the original Generals archives to be in the
+      // Zero Hour root. The Java setup normally provides the exact base
+      // folder through CNC_GENERALS_PATH, but the standard nested
+      // ZH_Generals folder is also detected directly as a safety net.
+      const char *androidBaseEnv = getenv("CNC_GENERALS_PATH");
+      if (androidBaseEnv != NULL && androidBaseEnv[0] != '\0')
       {
-        installPath = baseEnvValue;
-        DEBUG_LOG(("Win32BIGFileSystem::init - using CNC_GENERALS_PATH='%s' for the base Generals archives\\n",
-                   baseEnvValue));
-        fprintf(stderr, "INFO: Base Generals archives: CNC_GENERALS_PATH=%s\\n", baseEnvValue);
+        if (holdsBaseGameArchives(androidBaseEnv))
+        {
+          installPath = androidBaseEnv;
+          fprintf(stderr, "INFO: Android base Generals path from setup: %s\n", installPath.str());
+        }
+        else
+        {
+          fprintf(stderr, "WARNING: Android base Generals path has no Textures.big: %s\n", androidBaseEnv);
+        }
+      }
+
+      if (installPath.isEmpty() && holdsBaseGameArchives("ZH_Generals/"))
+      {
+        installPath = "ZH_Generals/";
+        fprintf(stderr, "INFO: Android detected standard Steam layout: %s\n", installPath.str());
+      }
+
+      if (installPath.isEmpty() && holdsBaseGameArchives("Generals/"))
+      {
+        installPath = "Generals/";
+        fprintf(stderr, "INFO: Android detected nested Generals layout: %s\n", installPath.str());
       }
 
       if (installPath.isEmpty())
       {
-        GetStringFromGeneralsRegistry("", "InstallPath", installPath );
-      }
-      if (!installPath.isEmpty() && !installPath.endsWith("\\"))
-      {
-        installPath.concat("\\");
-      }
-      if (!installPath.isEmpty() && !holdsBaseGameArchives(installPath.str()))
-      {
-        AsciiString firstDecade = installPath;
-        firstDecade.concat(FIRST_DECADE_GENERALS_FOLDER);
-        if (holdsBaseGameArchives(firstDecade.str()))
+        static const char *const ANDROID_SIBLING_DIRECTORIES[] = {
+          "../Command & Conquer Generals/",
+          "../Command & Conquer(tm) Generals/"
+        };
+        for (Int i = 0; i < (Int)ARRAY_SIZE(ANDROID_SIBLING_DIRECTORIES) && installPath.isEmpty(); ++i)
         {
-          installPath = firstDecade;
+          if (holdsBaseGameArchives(ANDROID_SIBLING_DIRECTORIES[i]))
+          {
+            installPath = ANDROID_SIBLING_DIRECTORIES[i];
+            fprintf(stderr, "INFO: Android detected sibling Base Generals layout: %s\n", installPath.str());
+          }
         }
       }
-      // An uninstalled retail or First Decade copy leaves its key behind, and trusting it loaded
-      // no base archive at all: the water and the ground came up magenta and black on the shell map.
+#endif
+
+      // Desktop installations still use the normal registry/fallback
+      // discovery when no explicit Android base path was selected.
+      if (installPath.isEmpty())
+      {
+        GetStringFromGeneralsRegistry("", "InstallPath", installPath );
+        if (!installPath.isEmpty() && !holdsBaseGameArchives(installPath.str()))
+        {
+          AsciiString firstDecade = installPath;
+          firstDecade.concat(FIRST_DECADE_GENERALS_FOLDER);
+          if (holdsBaseGameArchives(firstDecade.str()))
+          {
+            installPath = firstDecade;
+          }
+        }
+      }
+
       if (installPath.isEmpty() || !holdsBaseGameArchives(installPath.str()))
       {
-        DEBUG_LOG(("Win32BIGFileSystem::init - no base game archives in the registered folder '%s'\n", installPath.str()));
+        DEBUG_LOG(("Win32BIGFileSystem::init - no base game archives in selected candidate '%s'\n",
+          installPath.str()));
         installPath.clear();
+
         for (Int i = 0; i < (Int)ARRAY_SIZE(BASE_GAME_DIRECTORIES) && installPath.isEmpty(); i++)
         {
           if (holdsBaseGameArchives(BASE_GAME_DIRECTORIES[i]))
@@ -221,21 +283,13 @@ void Win32BIGFileSystem::init() {
           }
         }
       }
-      if (installPath.isEmpty())
+
+      if (installPath.isEmpty() || !loadBaseGameArchivesFromPath(installPath))
       {
         reportMissingBaseGame();
       }
-      else
-      {
-        // Loaded second on purpose: loadIntoDirectoryTree does not overwrite, so the
-        // Zero Hour bigs already in the tree win over the base game's copies.
-        DEBUG_LOG(("Win32BIGFileSystem::init - loading the base game's archives from '%s'\n", installPath.str()));
-        loadBigFilesFromDirectory(installPath, "*.big");
-      }
     }
 
-    // ... except where that costs resolution: a number of the base game's textures were shipped
-    // downscaled in TexturesZH.big, and load order alone made those the ones the game uses.
     prioritizeLargerFiles(TGA_DIR_PATH, "TexturesZH.big", "Textures.big");
 }
 
