@@ -1,6 +1,15 @@
 package org.reforged.zero.hour;
 
 import android.app.Activity;
+import android.graphics.Color;
+import android.graphics.Typeface;
+import android.graphics.drawable.GradientDrawable;
+import android.view.Gravity;
+import android.view.View;
+import android.widget.FrameLayout;
+import android.widget.LinearLayout;
+import android.widget.ScrollView;
+import android.widget.TextView;
 import android.app.AlertDialog;
 import android.content.ActivityNotFoundException;
 import android.content.Intent;
@@ -27,9 +36,22 @@ public final class SetupActivity extends Activity {
     private boolean pickerOpen = false;
     private boolean permissionScreenOpen = false;
 
+    // Reforged launcher shell: the native game is started only after the install
+    // has been validated; this screen itself never touches the renderer.
+    private FrameLayout launcherContent;
+    private LinearLayout bottomNav;
+    private TextView zeroHourPathView;
+    private TextView fileStatusView;
+    private TextView classicPathView;
+    private TextView primaryLaunchButton;
+    private int selectedTab = 0;
+
     @Override
     protected void onCreate(Bundle state) {
         super.onCreate(state);
+        getWindow().setStatusBarColor(Color.rgb(15, 18, 20));
+        getWindow().setNavigationBarColor(Color.rgb(15, 18, 20));
+        buildLauncherUi();
         new android.os.Handler(getMainLooper()).postDelayed(this::prepare, 150);
     }
 
@@ -186,6 +208,325 @@ public final class SetupActivity extends Activity {
         file.delete();
     }
 
+
+    private int dp(float value) {
+        return Math.round(value * getResources().getDisplayMetrics().density);
+    }
+
+    private GradientDrawable rounded(int color, float radiusDp) {
+        GradientDrawable d = new GradientDrawable();
+        d.setColor(color);
+        d.setCornerRadius(dp(radiusDp));
+        return d;
+    }
+
+    private TextView makeText(String value, float sizeSp, int color, boolean bold) {
+        TextView v = new TextView(this);
+        v.setText(value);
+        v.setTextSize(sizeSp);
+        v.setTextColor(color);
+        v.setGravity(Gravity.CENTER_VERTICAL);
+        v.setIncludeFontPadding(true);
+        if (bold) v.setTypeface(Typeface.DEFAULT, Typeface.BOLD);
+        return v;
+    }
+
+    private TextView actionButton(String label, int fill, int textColor) {
+        TextView b = makeText(label, 15f, textColor, true);
+        b.setGravity(Gravity.CENTER);
+        b.setPadding(dp(16), dp(12), dp(16), dp(12));
+        b.setBackground(rounded(fill, 28f));
+        b.setClickable(true);
+        b.setFocusable(true);
+        return b;
+    }
+
+    private LinearLayout card(LinearLayout page) {
+        LinearLayout c = new LinearLayout(this);
+        c.setOrientation(LinearLayout.VERTICAL);
+        c.setPadding(dp(17), dp(16), dp(17), dp(16));
+        c.setBackground(rounded(Color.rgb(27, 32, 34), 18f));
+        LinearLayout.LayoutParams lp = new LinearLayout.LayoutParams(-1, -2);
+        lp.topMargin = dp(12);
+        page.addView(c, lp);
+        return c;
+    }
+
+    private TextView addCardText(LinearLayout parent, String value, float size,
+                                 int color, boolean bold, int topDp) {
+        TextView v = makeText(value, size, color, bold);
+        LinearLayout.LayoutParams lp = new LinearLayout.LayoutParams(-1, -2);
+        lp.topMargin = dp(topDp);
+        parent.addView(v, lp);
+        return v;
+    }
+
+    private LinearLayout page() {
+        ScrollView scroll = new ScrollView(this);
+        scroll.setFillViewport(true);
+        scroll.setClipToPadding(false);
+        scroll.setPadding(dp(16), dp(10), dp(16), dp(18));
+        LinearLayout page = new LinearLayout(this);
+        page.setOrientation(LinearLayout.VERTICAL);
+        scroll.addView(page, new ScrollView.LayoutParams(-1, -2));
+        launcherContent.addView(scroll, new FrameLayout.LayoutParams(-1, -1));
+        return page;
+    }
+
+    private void buildLauncherUi() {
+        final int bg = Color.rgb(15, 18, 20);
+        final int primary = Color.rgb(160, 197, 92);
+        final int primaryText = Color.rgb(20, 25, 20);
+        final int textPrimary = Color.rgb(239, 242, 237);
+        final int textSecondary = Color.rgb(171, 181, 176);
+
+        LinearLayout root = new LinearLayout(this);
+        root.setOrientation(LinearLayout.VERTICAL);
+        root.setLayoutDirection(View.LAYOUT_DIRECTION_RTL);
+        root.setBackgroundColor(bg);
+
+        LinearLayout top = new LinearLayout(this);
+        top.setGravity(Gravity.CENTER_VERTICAL);
+        top.setPadding(dp(20), dp(14), dp(20), dp(12));
+        top.setBackgroundColor(Color.rgb(20, 24, 26));
+
+        LinearLayout titleBox = new LinearLayout(this);
+        titleBox.setOrientation(LinearLayout.VERTICAL);
+        top.addView(titleBox, new LinearLayout.LayoutParams(0, -2, 1f));
+
+        TextView over = makeText("ZERO HOUR", 11f, primary, true);
+        over.setLetterSpacing(0.12f);
+        titleBox.addView(over);
+
+        TextView title = makeText("Generals Zero Hour Reforged", 21f, textPrimary, true);
+        titleBox.addView(title);
+
+        TextView version = makeText("Android  •  Native GLES", 11f, textSecondary, false);
+        top.addView(version, new LinearLayout.LayoutParams(-2, -2));
+        root.addView(top, new LinearLayout.LayoutParams(-1, -2));
+
+        launcherContent = new FrameLayout(this);
+        root.addView(launcherContent, new LinearLayout.LayoutParams(-1, 0, 1f));
+
+        bottomNav = new LinearLayout(this);
+        bottomNav.setOrientation(LinearLayout.HORIZONTAL);
+        bottomNav.setGravity(Gravity.CENTER);
+        bottomNav.setPadding(dp(6), dp(4), dp(6), dp(4));
+        bottomNav.setBackgroundColor(Color.rgb(22, 27, 29));
+
+        String[] icons = {"⌂", "▣", "☰", "⚙", "?"};
+        String[] labels = {"الرئيسية", "الرسوميات", "الواجهة", "الأدوات", "المساعدة"};
+        for (int i = 0; i < labels.length; i++) {
+            TextView item = makeText(icons[i] + "\n" + labels[i], 12f, textSecondary, true);
+            item.setGravity(Gravity.CENTER);
+            item.setPadding(0, dp(6), 0, dp(4));
+            item.setTag(i);
+            final int tab = i;
+            item.setOnClickListener(v -> {
+                selectedTab = tab;
+                renderTab();
+            });
+            bottomNav.addView(item, new LinearLayout.LayoutParams(0, dp(58), 1f));
+        }
+        root.addView(bottomNav, new LinearLayout.LayoutParams(-1, dp(64)));
+
+        setContentView(root);
+        renderTab();
+    }
+
+    private void renderTab() {
+        if (launcherContent == null) return;
+        launcherContent.removeAllViews();
+
+        if (bottomNav != null) {
+            final int primary = Color.rgb(160, 197, 92);
+            final int selectedBg = Color.rgb(48, 60, 45);
+            final int secondary = Color.rgb(171, 181, 176);
+            for (int i = 0; i < bottomNav.getChildCount(); i++) {
+                TextView item = (TextView) bottomNav.getChildAt(i);
+                boolean selected = i == selectedTab;
+                item.setTextColor(selected ? primary : secondary);
+                item.setBackground(selected ? rounded(selectedBg, 18f) : null);
+            }
+        }
+
+        switch (selectedTab) {
+            case 1: buildGraphicsTab(); break;
+            case 2: buildInterfaceTab(); break;
+            case 3: buildToolsTab(); break;
+            case 4: buildHelpTab(); break;
+            default: buildHomeTab(); break;
+        }
+    }
+
+    private void sectionTitle(LinearLayout page, String title, String subtitle) {
+        TextView t = makeText(title, 25f, Color.rgb(239, 242, 237), true);
+        page.addView(t, new LinearLayout.LayoutParams(-1, -2));
+        if (subtitle != null)
+            addCardText(page, subtitle, 13f, Color.rgb(171, 181, 176), false, 2);
+    }
+
+    private void buildHomeTab() {
+        LinearLayout p = page();
+        sectionTitle(p, "جاهز للقتال؟", "شغّل Reforged بعد التأكد من ملفات Zero Hour الأصلية.");
+
+        primaryLaunchButton = actionButton("▶   تشغيل اللعبة",
+                Color.rgb(160, 197, 92), Color.rgb(20, 25, 20));
+        primaryLaunchButton.setTextSize(19f);
+        primaryLaunchButton.setOnClickListener(v -> {
+            String root = savedRoot();
+            Status status = root == null ? new Status() : inspect(new File(root));
+            if (!status.complete()) {
+                Toast.makeText(this, "اختر مجلد Zero Hour مكتملًا قبل التشغيل.",
+                        Toast.LENGTH_LONG).show();
+                return;
+            }
+            launchGame();
+        });
+        LinearLayout.LayoutParams launchLp = new LinearLayout.LayoutParams(-1, dp(64));
+        launchLp.topMargin = dp(16);
+        p.addView(primaryLaunchButton, launchLp);
+
+        LinearLayout files = card(p);
+        addCardText(files, "FILES & INSTALLATION", 11f,
+                Color.rgb(160, 197, 92), true, 0);
+        zeroHourPathView = addCardText(files, "مسار Zero Hour: —", 13f,
+                Color.rgb(171, 181, 176), false, 10);
+        fileStatusView = addCardText(files, "الحالة: جارٍ التحقق…", 14f,
+                Color.rgb(239, 242, 237), true, 8);
+        classicPathView = addCardText(files, "مسار Generals الكلاسيكية: —", 13f,
+                Color.rgb(171, 181, 176), false, 8);
+
+        LinearLayout buttons = new LinearLayout(this);
+        buttons.setOrientation(LinearLayout.HORIZONTAL);
+        buttons.setGravity(Gravity.CENTER);
+        LinearLayout.LayoutParams blp = new LinearLayout.LayoutParams(-1, -2);
+        blp.topMargin = dp(13);
+        files.addView(buttons, blp);
+
+        TextView choose = actionButton("اختيار مجلد اللعبة",
+                Color.rgb(51, 60, 63), Color.rgb(239, 242, 237));
+        choose.setTextSize(14f);
+        choose.setOnClickListener(v -> {
+            if (!hasDirectFileAccess()) showPermissionDialog();
+            else openPicker();
+        });
+        buttons.addView(choose, new LinearLayout.LayoutParams(0, dp(50), 1f));
+
+        TextView reset = actionButton("إعادة تعيين",
+                Color.rgb(27, 32, 34), Color.rgb(220, 130, 118));
+        reset.setTextSize(14f);
+        reset.setOnClickListener(v -> resetGameFolders());
+        LinearLayout.LayoutParams rlp = new LinearLayout.LayoutParams(0, dp(50), 0.72f);
+        rlp.setMarginStart(dp(8));
+        buttons.addView(reset, rlp);
+
+        LinearLayout reforged = card(p);
+        addCardText(reforged, "REFORGED DATA", 11f,
+                Color.rgb(160, 197, 92), true, 0);
+        addCardText(reforged,
+                "بيانات Reforged مضمّنة داخل التطبيق وتُجهّز تلقائيًا. " +
+                "ملفات BIG الأصلية تبقى في مكانها ولا تُنسخ إلى Android/data.",
+                13f, Color.rgb(171, 181, 176), false, 9);
+
+        refreshLauncherStatus();
+    }
+
+    private void buildGraphicsTab() {
+        LinearLayout p = page();
+        sectionTitle(p, "الرسوميات", "مساحة إعدادات Native GLES الخاصة بالنسخة الجديدة.");
+        LinearLayout c = card(p);
+        addCardText(c, "محرك العرض", 17f, Color.rgb(239, 242, 237), true, 0);
+        addCardText(c, "OpenGL ES 3.0  •  Native renderer", 14f,
+                Color.rgb(160, 197, 92), true, 9);
+        addCardText(c,
+                "لاحقًا: الدقة، مقياس العرض، جودة المؤثرات، والحد الأقصى لمعدل الإطارات.",
+                13f, Color.rgb(171, 181, 176), false, 8);
+    }
+
+    private void buildInterfaceTab() {
+        LinearLayout p = page();
+        sectionTitle(p, "الواجهة", "تخصيص واجهة المشغّل قبل الدخول إلى اللعبة.");
+        LinearLayout c = card(p);
+        addCardText(c, "اللغة", 17f, Color.rgb(239, 242, 237), true, 0);
+        addCardText(c, "العربية (RTL)", 14f, Color.rgb(160, 197, 92), true, 9);
+        addCardText(c,
+                "لاحقًا: حجم النص، كثافة العناصر، ونمط الواجهة.",
+                13f, Color.rgb(171, 181, 176), false, 8);
+    }
+
+    private void buildToolsTab() {
+        LinearLayout p = page();
+        sectionTitle(p, "الأدوات", "أدوات التشخيص وإدارة ملفات اللعبة.");
+        TextView log = actionButton("عرض آخر سجل تشغيل",
+                Color.rgb(51, 60, 63), Color.rgb(239, 242, 237));
+        log.setOnClickListener(v -> {
+            if (!showNativeDiagnosticsIfPresent())
+                Toast.makeText(this, "لا يوجد سجل تشغيل جديد.", Toast.LENGTH_SHORT).show();
+        });
+        p.addView(log, new LinearLayout.LayoutParams(-1, dp(54)));
+
+        TextView reset = actionButton("مسح مسارات اللعبة",
+                Color.rgb(27, 32, 34), Color.rgb(220, 130, 118));
+        reset.setOnClickListener(v -> resetGameFolders());
+        LinearLayout.LayoutParams lp = new LinearLayout.LayoutParams(-1, dp(54));
+        lp.topMargin = dp(10);
+        p.addView(reset, lp);
+    }
+
+    private void buildHelpTab() {
+        LinearLayout p = page();
+        sectionTitle(p, "المساعدة", "تجهيز Zero Hour Reforged وتشغيله بأقل خطوات.");
+        LinearLayout c = card(p);
+        addCardText(c, "1", 18f, Color.rgb(160, 197, 92), true, 0);
+        addCardText(c, "اختر مجلد تثبيت Zero Hour من زر «اختيار مجلد اللعبة».",
+                14f, Color.rgb(239, 242, 237), false, 3);
+        addCardText(c, "2", 18f, Color.rgb(160, 197, 92), true, 10);
+        addCardText(c, "يجب أن تظهر INIZH.big وملفات Generals الأساسية كمتوفرة.",
+                14f, Color.rgb(239, 242, 237), false, 3);
+        addCardText(c, "3", 18f, Color.rgb(160, 197, 92), true, 10);
+        addCardText(c, "بعد ظهور «تم العثور على الملفات» اضغط «تشغيل اللعبة».",
+                14f, Color.rgb(239, 242, 237), false, 3);
+        addCardText(c, "مهم: لا تحتاج لنسخ ملفات BIG يدويًا إلى Android/data.",
+                13f, Color.rgb(171, 181, 176), false, 12);
+    }
+
+    private void refreshLauncherStatus() {
+        if (zeroHourPathView == null) return;
+        String root = savedRoot();
+        String base = savedBaseRoot();
+        if (root == null) {
+            zeroHourPathView.setText("مسار Zero Hour: لم يتم اختيار مجلد اللعبة");
+            fileStatusView.setText("الحالة: ⚠ لم يتم العثور على الملفات بعد");
+            fileStatusView.setTextColor(Color.rgb(240, 184, 85));
+            classicPathView.setText("مسار Generals الكلاسيكية: لم يتم تحديده");
+            if (primaryLaunchButton != null) primaryLaunchButton.setAlpha(0.55f);
+            return;
+        }
+
+        Status status = inspect(new File(root));
+        String detectedBase = status.baseFolder == null ? base : status.baseFolder.getAbsolutePath();
+        zeroHourPathView.setText("مسار Zero Hour:\n" + root);
+        fileStatusView.setText(status.complete()
+                ? "الحالة: ✅ تم العثور على الملفات"
+                : "الحالة: ⚠ الملفات ناقصة — لا يمكن التشغيل");
+        fileStatusView.setTextColor(status.complete()
+                ? Color.rgb(160, 197, 92) : Color.rgb(240, 184, 85));
+        classicPathView.setText("مسار Generals الكلاسيكية:\n" +
+                (detectedBase == null ? "لم يتم العثور عليه" : detectedBase));
+        if (primaryLaunchButton != null)
+            primaryLaunchButton.setAlpha(status.complete() ? 1f : 0.55f);
+    }
+
+    private void resetGameFolders() {
+        File root = rootMarker();
+        File base = baseRootMarker();
+        if (root != null) root.delete();
+        if (base != null) base.delete();
+        Toast.makeText(this, "تمت إعادة تعيين مسارات اللعبة.", Toast.LENGTH_SHORT).show();
+        renderTab();
+    }
+
     private void prepare() {
         if (!ensureReforgedData()) {
             showError("تعذر تجهيز ملفات Zero Hour Reforged المدمجة داخل التطبيق.");
@@ -194,12 +535,11 @@ public final class SetupActivity extends Activity {
 
         String root = savedRoot();
         if (root != null && inspect(new File(root)).complete()) {
-            if (showNativeDiagnosticsIfPresent()) return;
-            launchGame();
+            refreshLauncherStatus();
+            showNativeDiagnosticsIfPresent();
             return;
         }
-        if (!hasDirectFileAccess()) showPermissionDialog();
-        else openPicker();
+        refreshLauncherStatus();
     }
 
     private void showPermissionDialog() {
@@ -441,6 +781,7 @@ public final class SetupActivity extends Activity {
         try {
             writeMarker(marker, folder.getCanonicalPath(), ".zh-game-root.new");
             writeMarker(baseMarker, baseFolder.getCanonicalPath(), ".zh-base-generals-root.new");
+            refreshLauncherStatus();
         } catch (Exception e) {
             showError("تعذر حفظ مسارات ملفات اللعبة.");
         }
@@ -536,6 +877,12 @@ public final class SetupActivity extends Activity {
     }
 
     private void launchGame() {
+        String root = savedRoot();
+        if (root == null || !inspect(new File(root)).complete()) {
+            Toast.makeText(this, "لا يمكن تشغيل اللعبة قبل اكتمال ملفات Zero Hour.",
+                    Toast.LENGTH_LONG).show();
+            return;
+        }
         startActivity(new Intent(this, GeneralsActivity.class));
         finish();
     }
