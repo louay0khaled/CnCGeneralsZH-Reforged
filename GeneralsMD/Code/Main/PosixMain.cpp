@@ -541,11 +541,13 @@ int main( int argc, char *argv[] )
 		}
 
 #if defined(__ANDROID__)
-		// Zero Hour and the original Generals are two different asset roots.
-		// MYSOREZ passes the base-Generals directory to the native archive
-		// loader through CNC_GENERALS_PATH; mirror that contract here so a
-		// Steam/Deluxe ZH folder can keep Textures.big in ZH_Generals (or in
-		// the sibling Generals folder) without pretending it is a Zero Hour file.
+		// Android has two physical asset roots in the supported Steam layout:
+		//   <Zero Hour>/INIZH.big
+		//   <Zero Hour>/ZH_Generals/Textures.big
+		// The engine mounts both into one virtual archive tree. The Java setup
+		// writes the exact Base Generals path, while this native fallback makes
+		// the standard ZH_Generals layout work even if app state was cleared.
+		bool androidBaseRootSet = false;
 		{
 			const char *external = SDL_GetAndroidExternalStoragePath();
 			if (external != NULL && external[0] != '\0')
@@ -566,7 +568,8 @@ int main( int argc, char *argv[] )
 						if (n > 0 && stat(basePath, &st) == 0 && S_ISDIR(st.st_mode))
 						{
 							setenv("CNC_GENERALS_PATH", basePath, 1);
-							fprintf(stderr, "INFO: Android base Generals root: %s\n", basePath);
+							androidBaseRootSet = true;
+							fprintf(stderr, "INFO: Android base Generals root from setup: %s\n", basePath);
 						}
 						else
 						{
@@ -575,12 +578,36 @@ int main( int argc, char *argv[] )
 					}
 					fclose(fp);
 				}
-				else
+			}
+		}
+
+		if (!androidBaseRootSet)
+		{
+			const char *baseCandidates[] = {
+				"ZH_Generals",
+				"Generals",
+				"../Command & Conquer Generals",
+				"../Command & Conquer(tm) Generals"
+			};
+
+			for (size_t i = 0; i < sizeof(baseCandidates) / sizeof(baseCandidates[0]); ++i)
+			{
+				char texturesPath[PATH_MAX];
+				struct stat st;
+				snprintf(texturesPath, sizeof(texturesPath), "%s/Textures.big", baseCandidates[i]);
+				if (stat(texturesPath, &st) == 0 && S_ISREG(st.st_mode))
 				{
-					fprintf(stderr, "INFO: Android base Generals marker not set; archive loader will use its normal fallback search\n");
+					setenv("CNC_GENERALS_PATH", baseCandidates[i], 1);
+					androidBaseRootSet = true;
+					fprintf(stderr, "INFO: Android auto-detected Base Generals folder: %s\n", baseCandidates[i]);
+					break;
 				}
 			}
 		}
+
+		if (!androidBaseRootSet)
+			fprintf(stderr, "WARNING: Android could not locate Base Generals Textures.big beside the selected Zero Hour root\n");
+
 		fprintf(stderr, "INFO: Android Zero Hour root: %s\n", root);
 #endif
 		PosixPath_Set_Overlays( overlays );
