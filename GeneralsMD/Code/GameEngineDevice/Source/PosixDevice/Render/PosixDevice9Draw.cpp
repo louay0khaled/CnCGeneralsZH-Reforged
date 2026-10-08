@@ -44,10 +44,6 @@
 #include <stdlib.h>
 #include <string.h>
 
-#if defined(__ANDROID__)
-extern void appendAndroidDiagnostic(const char *message);
-#endif
-
 //-------------------------------------------------------------------------------------------------
 // D3D9's initial state, from its documentation of each state.  A float state holds its float's bits.
 //-------------------------------------------------------------------------------------------------
@@ -491,11 +487,6 @@ void PosixDevice9::Refuse_Draw(const std::string &reason)
 	unsigned int &count = DrawRefusals[reason];
 	if (count++ == 0) {
 		fprintf(stderr, "PosixDevice9: a draw refused: %s\n", reason.c_str());
-#if defined(__ANDROID__)
-		char diagnostic[768];
-		snprintf(diagnostic, sizeof(diagnostic), "GLES draw refused: %s", reason.c_str());
-		appendAndroidDiagnostic(diagnostic);
-#endif
 	}
 }
 
@@ -1128,14 +1119,6 @@ RenderResult PosixDevice9::Gpu_Draw(const DrawCall &call)
 	draw.BlendFactor = RenderStates[D3DRS_BLENDFACTOR];
 	Gpu->Record_Draw(draw);
 	++DrawsRecorded;
-#if defined(__ANDROID__)
-	if (DrawsRecorded <= 5 || (DrawsRecorded % 1000) == 0) {
-		char diagnostic[384];
-		snprintf(diagnostic, sizeof(diagnostic), "GLES draw accepted: total=%u fvf=0x%08X",
-			DrawsRecorded, (unsigned)FVF);
-		appendAndroidDiagnostic(diagnostic);
-	}
-#endif
 	if (vertex_engine != ENGINE_SHADER_NONE || pixel_engine != ENGINE_SHADER_NONE) {
 		++EngineProgramDraws[EngineShader_Name((EngineShaderProgram)(vertex_engine != ENGINE_SHADER_NONE
 			? vertex_engine : pixel_engine))];

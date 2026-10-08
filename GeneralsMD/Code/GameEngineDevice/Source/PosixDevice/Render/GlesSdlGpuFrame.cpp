@@ -626,9 +626,10 @@ bool SdlGpuFrame::Gles_Replay()
 #if defined(__ANDROID__)
     {
         static bool reportedBackPixel = false;
-        if (!reportedBackPixel && back != NULL) {
+        GlesTexture *backPixelTarget = Gles_Texture(frame->BackBuffer);
+        if (!reportedBackPixel && backPixelTarget != NULL && backPixelTarget->Fbo != 0) {
             unsigned char pixel[4] = {0, 0, 0, 0};
-            glBindFramebuffer(GL_FRAMEBUFFER, Gles_Texture(frame->BackBuffer)->Fbo);
+            glBindFramebuffer(GL_FRAMEBUFFER, backPixelTarget->Fbo);
             glReadPixels((GLint)(frame->BackWidth / 2u), (GLint)(frame->BackHeight / 2u),
                 1, 1, GL_RGBA, GL_UNSIGNED_BYTE, pixel);
             const GLenum readError = glGetError();
