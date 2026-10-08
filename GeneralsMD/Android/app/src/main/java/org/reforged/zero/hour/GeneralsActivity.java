@@ -17,12 +17,36 @@ public final class GeneralsActivity extends SDLActivity {
 
     @Override
     protected void onCreate(Bundle state) {
-        super.onCreate(state);
         previousHandler = Thread.getDefaultUncaughtExceptionHandler();
         Thread.setDefaultUncaughtExceptionHandler((thread, throwable) -> {
             writeJavaCrashReport(thread, throwable);
             if (previousHandler != null) previousHandler.uncaughtException(thread, throwable);
         });
+
+        writeJavaStartupTrace("GeneralsActivity.onCreate: before SDLActivity");
+        try {
+            super.onCreate(state);
+            writeJavaStartupTrace("GeneralsActivity.onCreate: SDLActivity returned");
+        } catch (Throwable throwable) {
+            writeJavaCrashReport(Thread.currentThread(), throwable);
+            writeJavaStartupTrace("GeneralsActivity.onCreate: super.onCreate threw");
+            throw throwable;
+        }
+    }
+
+    private void writeJavaStartupTrace(String message) {
+        File external = getExternalFilesDir(null);
+        File logs = external != null
+                ? new File(external, "ZeroHourData/Logs")
+                : new File(new File(getFilesDir(), "ZeroHourData"), "Logs");
+        if (!logs.isDirectory()) logs.mkdirs();
+        File trace = new File(logs, "JavaStartupTrace.txt");
+        String line = "[" + System.currentTimeMillis() + "] " + message + "\n";
+        try (FileOutputStream out = new FileOutputStream(trace, true)) {
+            out.write(line.getBytes(StandardCharsets.UTF_8));
+            out.flush();
+            out.getFD().sync();
+        } catch (Exception ignored) {}
     }
 
     private void writeJavaCrashReport(Thread thread, Throwable throwable) {
