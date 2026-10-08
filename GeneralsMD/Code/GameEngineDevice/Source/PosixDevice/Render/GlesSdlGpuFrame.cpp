@@ -490,6 +490,10 @@ bool SdlGpuFrame::Gles_Replay()
         return false;
     }
 
+    unsigned int drawCommands = 0;
+    unsigned int clearCommands = 0;
+    unsigned int skippedDraws = 0;
+
     for (size_t i = 0; i < frame->Commands.size(); ++i) {
         const SdlGpuFrame::Command &command = frame->Commands[i];
         if (command.IsBlit) {
@@ -575,14 +579,41 @@ bool SdlGpuFrame::Gles_Replay()
         } else {
             // The program cache has already compiled and pipeline cache has already linked the program.
             // Constants and resource mirrors are current at this point.
-            if (frame->Draws[command.Draw].Pipeline == NULL) continue;
+            ++drawCommands;
+            if (frame->Draws[command.Draw].Pipeline == NULL) {
+                ++skippedDraws;
+                continue;
+            }
             DrawOne(frame->Draws[command.Draw], state, target.Width, target.Height,
                 frame->ConstantBytes.empty() ? NULL : &frame->ConstantBytes[0].Value, frame->ConstantBytes.size());
         }
     }
+
+    // Draw state is owned by the game command stream. Reset the state that can affect
+    // the subsequent FBO -> default-framebuffer presentation explicitly.
+    glDisable(GL_SCISSOR_TEST);
+    glDisable(GL_STENCIL_TEST);
+    glDisable(GL_DEPTH_TEST);
+    glDisable(GL_BLEND);
+    glColorMask(GL_TRUE, GL_TRUE, GL_TRUE, GL_TRUE);
+    glDepthMask(GL_TRUE);
     glBindFramebuffer(GL_FRAMEBUFFER, 0);
     glFlush();
-    return glGetError() == GL_NO_ERROR;
+    const GLenum replayError = glGetError();
+#if defined(__ANDROID__)
+    {
+        static unsigned int reports = 0;
+        if (reports < 3) {
+            char diagnostic[768];
+            snprintf(diagnostic, sizeof(diagnostic),
+                "GLES replay: commands=%u draws=%u skipped=%u glError=0x%04X",
+                (unsigned)frame->Commands.size(), drawCommands, skippedDraws, (unsigned)replayError);
+            appendAndroidDiagnostic(diagnostic);
+            ++reports;
+        }
+    }
+#endif
+    return replayError == GL_NO_ERROR;
 }
 
 SdlGpuFrame::SdlGpuFrame() :
@@ -960,29 +991,79 @@ bool SdlGpuFrame::Flush()
 bool SdlGpuFrame::Present(const uint16_t (*ramp)[256])
 {
     (void)ramp;
-    if (!Flush()) return false;
+    if (!Flush()) {
+#if defined(__ANDROID__)
+        appendAndroidDiagnostic("GLES Present: Flush failed");
+#endif
+        return false;
+    }
     GlesFrameState *state = State(this);
     GlesTexture *back = Gles_Texture(BackBuffer);
     GlesTexture *front = Gles_Texture(FrontCopy);
-    if (state == NULL || back == NULL || back->Fbo == 0) return false;
+    if (state == NULL || state->Context == NULL || back == NULL || back->Fbo == 0) {
+#if defined(__ANDROID__)
+        appendAndroidDiagnostic("GLES Present: missing GL state/back buffer");
+#endif
+        return false;
+    }
 
-    SDL_GL_MakeCurrent(state->Window, state->Context);
-    Copy_To_Front(NULL);
+    if (!SDL_GL_MakeCurrent(state->Window, state->Context)) {
+#if defined(__ANDROID__)
+        char diagnostic[512];
+        snprintf(diagnostic, sizeof(diagnostic), "GLES Present: MakeCurrent failed: %s", SDL_GetError());
+        appendAndroidDiagnostic(diagnostic);
+#endif
+        return false;
+    }
+
+    // Presentation is a fresh framebuffer operation. Do not inherit the last draw's
+    // scissor/depth/stencil/blend state when copying into Android's default framebuffer.
+    glDisable(GL_SCISSOR_TEST);
+    glDisable(GL_STENCIL_TEST);
+    glDisable(GL_DEPTH_TEST);
+    glDisable(GL_BLEND);
+    glColorMask(GL_TRUE, GL_TRUE, GL_TRUE, GL_TRUE);
+    glDepthMask(GL_TRUE);
+
+    (void)Copy_To_Front(NULL);
 
     int drawableWidth = 0, drawableHeight = 0;
     SDL_GetWindowSizeInPixels(state->Window, &drawableWidth, &drawableHeight);
     state->DrawableWidth = drawableWidth > 0 ? (unsigned)drawableWidth : BackWidth;
     state->DrawableHeight = drawableHeight > 0 ? (unsigned)drawableHeight : BackHeight;
+    if (state->DrawableWidth == 0 || state->DrawableHeight == 0) {
+#if defined(__ANDROID__)
+        appendAndroidDiagnostic("GLES Present: drawable size is zero");
+#endif
+        return false;
+    }
 
     glBindFramebuffer(GL_READ_FRAMEBUFFER, back->Fbo);
     glBindFramebuffer(GL_DRAW_FRAMEBUFFER, 0);
     glBlitFramebuffer(0, 0, (GLint)BackWidth, (GLint)BackHeight,
         0, 0, (GLint)state->DrawableWidth, (GLint)state->DrawableHeight,
-        GL_COLOR_BUFFER_BIT, GL_LINEAR);
+        GL_COLOR_BUFFER_BIT, GL_NEAREST);
+    const GLenum blitError = glGetError();
     glBindFramebuffer(GL_FRAMEBUFFER, 0);
-    SDL_GL_SwapWindow(state->Window);
+    glViewport(0, 0, (GLsizei)state->DrawableWidth, (GLsizei)state->DrawableHeight);
+
+    const bool swapped = SDL_GL_SwapWindow(state->Window);
+#if defined(__ANDROID__)
+    {
+        static unsigned int reports = 0;
+        if (reports < 5 || !swapped || blitError != GL_NO_ERROR) {
+            char diagnostic[768];
+            snprintf(diagnostic, sizeof(diagnostic),
+                "GLES Present: back=%ux%u drawable=%ux%u blitError=0x%04X swap=%s",
+                BackWidth, BackHeight, state->DrawableWidth, state->DrawableHeight,
+                (unsigned)blitError, swapped ? "OK" : "FAIL");
+            appendAndroidDiagnostic(diagnostic);
+            ++reports;
+        }
+    }
+#endif
     (void)front;
-    return true;
+    return blitError == GL_NO_ERROR && swapped;
 }
 
 void SdlGpuFrame::Take_Timing(double &flush_ms, double &fence_ms, unsigned int &flushes, double &acquire_ms,
