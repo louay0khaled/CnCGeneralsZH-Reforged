@@ -32,7 +32,10 @@ struct GlesFrameState
     GLuint UniformBuffers[2];
     unsigned int DrawableWidth;
     unsigned int DrawableHeight;
+    unsigned int FrameId;
 };
+
+static unsigned int NextGlesFrameId = 0;
 
 template <typename T>
 static void GrowBytes(std::vector<T> &bytes, uint32_t size, uint32_t &offset)
@@ -274,12 +277,12 @@ static GLenum GlesStencilLocal(uint8_t op);
 static GLenum GlesBlendLocal(uint8_t factor);
 static GLenum GlesBlendOpLocal(uint8_t op);
 
-static void DrawOne(const SdlRecordedDraw &draw, GlesFrameState *state, unsigned int targetWidth, unsigned int targetHeight,
+static bool DrawOne(const SdlRecordedDraw &draw, GlesFrameState *state, unsigned int targetWidth, unsigned int targetHeight,
     const uint8_t *constants, size_t constantsSize)
 {
-    if (draw.Pipeline == NULL) return;
+    if (draw.Pipeline == NULL) return false;
     GlesPipeline *pipeline = Gles_Pipeline(draw.Pipeline);
-    if (pipeline == NULL || pipeline->Program == 0) return;
+    if (pipeline == NULL || pipeline->Program == 0) return false;
 
     glUseProgram(pipeline->Program);
 
@@ -288,7 +291,7 @@ static void DrawOne(const SdlRecordedDraw &draw, GlesFrameState *state, unsigned
         : NULL;
     if (vertices == NULL) {
         fprintf(stderr, "GlesFrame: draw without a vertex buffer\\n");
-        return;
+        return false;
     }
 
     const GlesBuffer *indices = draw.IndexBuffer != NULL ? Gles_Buffer(draw.IndexBuffer) : NULL;
@@ -367,7 +370,7 @@ static void DrawOne(const SdlRecordedDraw &draw, GlesFrameState *state, unsigned
         glDisable(GL_SCISSOR_TEST);
     }
 
-    if (!SetupAttributes(*pipeline, draw, vertices, targetHeight)) return;
+    if (!SetupAttributes(*pipeline, draw, vertices, targetHeight)) return false;
 
     if (draw.VertexConstantsSize != 0 && draw.VertexConstants + draw.VertexConstantsSize <= constantsSize)
         BindUniformBlockState(state, 0, constants + draw.VertexConstants, draw.VertexConstantsSize);
@@ -385,6 +388,9 @@ static void DrawOne(const SdlRecordedDraw &draw, GlesFrameState *state, unsigned
         glActiveTexture(GL_TEXTURE0 + slot);
         glBindTexture(GL_TEXTURE_2D, texture != NULL ? texture->Name : 0);
         glBindSampler(slot, sampler != NULL ? sampler->Name : 0);
+    }
+
+    while (glGetError() != GL_NO_ERROR) {
     }
 
     GLenum mode = GL_TRIANGLES;
@@ -406,7 +412,22 @@ static void DrawOne(const SdlRecordedDraw &draw, GlesFrameState *state, unsigned
         glBindBuffer(GL_ELEMENT_ARRAY_BUFFER, 0);
         glDrawArrays(mode, (GLint)draw.First, (GLsizei)draw.Count);
     }
+    const GLenum drawError = glGetError();
+#if defined(__ANDROID__)
+    if (drawError != GL_NO_ERROR) {
+        static unsigned int drawErrorReports = 0;
+        if (drawErrorReports < 10) {
+            char diagnostic[512];
+            snprintf(diagnostic, sizeof(diagnostic),
+                "GLES draw GL error: frame=%u program=%u error=0x%04X",
+                state->FrameId, (unsigned)pipeline->Program, (unsigned)drawError);
+            appendAndroidDiagnostic(diagnostic);
+            ++drawErrorReports;
+        }
+    }
+#endif
     (void)targetWidth;
+    return drawError == GL_NO_ERROR;
 }
 
 static GLenum GlesCompareLocal(uint8_t op)
@@ -493,6 +514,7 @@ bool SdlGpuFrame::Gles_Replay()
     unsigned int drawCommands = 0;
     unsigned int clearCommands = 0;
     unsigned int skippedDraws = 0;
+    unsigned int executedDraws = 0;
 
     for (size_t i = 0; i < frame->Commands.size(); ++i) {
         const SdlGpuFrame::Command &command = frame->Commands[i];
@@ -519,6 +541,7 @@ bool SdlGpuFrame::Gles_Replay()
         if (!BindTarget(state, target)) continue;
 
         if (!command.IsDraw) {
+            ++clearCommands;
             GLbitfield clear = 0;
             GLboolean oldColor[4];
             GLboolean oldDepth = GL_FALSE;
@@ -551,6 +574,7 @@ bool SdlGpuFrame::Gles_Replay()
             glDepthMask(oldDepth);
             glStencilMask((GLuint)oldStencil);
         } else if (command.IsRect) {
+            ++clearCommands;
             GLbitfield clear = 0;
             const unsigned int h = target.Height;
             glEnable(GL_SCISSOR_TEST);
@@ -584,8 +608,10 @@ bool SdlGpuFrame::Gles_Replay()
                 ++skippedDraws;
                 continue;
             }
-            DrawOne(frame->Draws[command.Draw], state, target.Width, target.Height,
-                frame->ConstantBytes.empty() ? NULL : &frame->ConstantBytes[0].Value, frame->ConstantBytes.size());
+            if (DrawOne(frame->Draws[command.Draw], state, target.Width, target.Height,
+                frame->ConstantBytes.empty() ? NULL : &frame->ConstantBytes[0].Value, frame->ConstantBytes.size())) {
+                ++executedDraws;
+            }
         }
     }
 
@@ -597,19 +623,40 @@ bool SdlGpuFrame::Gles_Replay()
     glDisable(GL_BLEND);
     glColorMask(GL_TRUE, GL_TRUE, GL_TRUE, GL_TRUE);
     glDepthMask(GL_TRUE);
+#if defined(__ANDROID__)
+    {
+        static bool reportedBackPixel = false;
+        if (!reportedBackPixel && back != NULL) {
+            unsigned char pixel[4] = {0, 0, 0, 0};
+            glBindFramebuffer(GL_FRAMEBUFFER, Gles_Texture(frame->BackBuffer)->Fbo);
+            glReadPixels((GLint)(frame->BackWidth / 2u), (GLint)(frame->BackHeight / 2u),
+                1, 1, GL_RGBA, GL_UNSIGNED_BYTE, pixel);
+            const GLenum readError = glGetError();
+            char diagnostic[512];
+            snprintf(diagnostic, sizeof(diagnostic),
+                "GLES back pixel: frame=%u rgba=%u,%u,%u,%u readError=0x%04X",
+                state->FrameId, pixel[0], pixel[1], pixel[2], pixel[3], (unsigned)readError);
+            appendAndroidDiagnostic(diagnostic);
+            reportedBackPixel = true;
+        }
+    }
+#endif
     glBindFramebuffer(GL_FRAMEBUFFER, 0);
     glFlush();
     const GLenum replayError = glGetError();
 #if defined(__ANDROID__)
     {
         static unsigned int reports = 0;
-        if (reports < 3) {
+        static bool reportedDrawBatch = false;
+        if (reports < 6 || (executedDraws > 0 && !reportedDrawBatch)) {
             char diagnostic[768];
             snprintf(diagnostic, sizeof(diagnostic),
-                "GLES replay: commands=%u draws=%u skipped=%u glError=0x%04X",
-                (unsigned)frame->Commands.size(), drawCommands, skippedDraws, (unsigned)replayError);
+                "GLES replay: frame=%u commands=%u draws=%u executed=%u skipped=%u clears=%u glError=0x%04X",
+                state->FrameId, (unsigned)frame->Commands.size(), drawCommands, executedDraws,
+                skippedDraws, clearCommands, (unsigned)replayError);
             appendAndroidDiagnostic(diagnostic);
             ++reports;
+            if (executedDraws > 0) reportedDrawBatch = true;
         }
     }
 #endif
@@ -726,13 +773,14 @@ SdlGpuFrame *SdlGpuFrame::Create(RenderWindow window, unsigned int width, unsign
     state->UniformBuffers[0] = state->UniformBuffers[1] = 0;
     state->DrawableWidth = width;
     state->DrawableHeight = height;
+    state->FrameId = ++NextGlesFrameId;
     glGenFramebuffers(1, &state->TargetFbo);
     glGenBuffers(2, state->UniformBuffers);
 #if defined(__ANDROID__)
     {
         char info[256];
-        snprintf(info, sizeof(info), "GLES frame objects: fbo=%u ubo0=%u ubo1=%u",
-            (unsigned)state->TargetFbo, (unsigned)state->UniformBuffers[0], (unsigned)state->UniformBuffers[1]);
+        snprintf(info, sizeof(info), "GLES frame id=%u objects: fbo=%u ubo0=%u ubo1=%u",
+            state->FrameId, (unsigned)state->TargetFbo, (unsigned)state->UniformBuffers[0], (unsigned)state->UniformBuffers[1]);
         appendAndroidDiagnostic(info);
     }
 #endif
@@ -815,6 +863,13 @@ SdlGpuFrame::~SdlGpuFrame()
 #if defined(__ANDROID__)
     GlesFrameState *state = State(this);
     if (state != NULL) {
+#if defined(__ANDROID__)
+        {
+            char diagnostic[256];
+            snprintf(diagnostic, sizeof(diagnostic), "GLES Destroy frame id=%u", state->FrameId);
+            appendAndroidDiagnostic(diagnostic);
+        }
+#endif
         SDL_GL_MakeCurrent(state->Window, state->Context);
         if (state->UniformBuffers[0] != 0) glDeleteBuffers(2, state->UniformBuffers);
         if (state->TargetFbo != 0) glDeleteFramebuffers(1, &state->TargetFbo);
