@@ -21,6 +21,7 @@
 
 #include "SdlGpuFrame.h"
 #include "sdl3shadercompile.h"
+#include "SdlCreationLog.h"
 
 #include <SDL3/SDL.h>
 
@@ -193,6 +194,16 @@ SDL_GPUGraphicsPipeline * SdlGpuFrame::Clear_Pipeline(unsigned int which)
 
 void SdlGpuFrame::Record_Draw(const SdlRecordedDraw & draw)
 {
+#if defined(__ANDROID__)
+	static unsigned int androidRecords = 0;
+	++androidRecords;
+	if (androidRecords <= 24 && Sdl_Creation_Log_Asked()) {
+		char line[256];
+		snprintf(line, sizeof(line), "ANDROID FRAME RECORD_DRAW %u: command_before=%u draw_before=%u",
+			androidRecords, (unsigned)Commands.size(), (unsigned)Draws.size());
+		Sdl_Creation_Log_Line(line);
+	}
+#endif
 	Command command;
 	memset(&command, 0, sizeof(command));
 	command.IsDraw = true;
