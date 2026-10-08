@@ -476,7 +476,19 @@ bool SdlGpuFrame::Gles_Replay()
     SdlGpuFrame *frame = this;
     GlesFrameState *state = State(frame);
     if (state == NULL || state->Context == NULL) return false;
-    if (SDL_GL_MakeCurrent(state->Window, state->Context) != 0) return false;
+    // SDL3: true means the context is current, false means failure.
+    if (!SDL_GL_MakeCurrent(state->Window, state->Context)) {
+#if defined(__ANDROID__)
+        static bool reported = false;
+        if (!reported) {
+            reported = true;
+            char diagnostic[512];
+            snprintf(diagnostic, sizeof(diagnostic), "GLES replay SDL_GL_MakeCurrent failed: %s", SDL_GetError());
+            appendAndroidDiagnostic(diagnostic);
+        }
+#endif
+        return false;
+    }
 
     for (size_t i = 0; i < frame->Commands.size(); ++i) {
         const SdlGpuFrame::Command &command = frame->Commands[i];
@@ -662,7 +674,9 @@ SdlGpuFrame *SdlGpuFrame::Create(RenderWindow window, unsigned int width, unsign
         error = std::string("OpenGL ES context: ") + SDL_GetError();
         return NULL;
     }
-    if (SDL_GL_MakeCurrent((SDL_Window *)window, context) != 0) {
+    // SDL3 returns true on success and false on failure. The previous code used
+    // the SDL2-style numeric convention and rejected every successful context.
+    if (!SDL_GL_MakeCurrent((SDL_Window *)window, context)) {
 #if defined(__ANDROID__)
         {
             char diagnostic[512];
