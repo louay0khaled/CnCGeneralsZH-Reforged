@@ -1500,7 +1500,8 @@ if(ZH_PLATFORM_POSIX)
   endif()
   add_library(posixd3d9 STATIC ${POSIXD3D9_SOURCES})
   set_target_properties(posixd3d9 PROPERTIES CXX_STANDARD 17)
-  target_include_directories(posixd3d9 PUBLIC ${ZH_POSIX_D3D9_INCLUDE})
+  target_include_directories(posixd3d9 PUBLIC ${ZH_POSIX_D3D9_INCLUDE}
+    PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/GameEngine/Include)
   if(ZH_PLATFORM_ANDROID)
     # GlesSdlProgramCache uses SPIRV-Cross's C API directly to translate the existing
     # HLSL -> SPIR-V output into GLSL ES 3.00. Keep the dependency explicit on the
