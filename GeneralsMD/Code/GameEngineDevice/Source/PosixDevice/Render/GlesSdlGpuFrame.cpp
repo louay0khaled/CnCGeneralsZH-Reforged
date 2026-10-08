@@ -277,8 +277,8 @@ static GLenum GlesStencilLocal(uint8_t op);
 static GLenum GlesBlendLocal(uint8_t factor);
 static GLenum GlesBlendOpLocal(uint8_t op);
 
-static bool DrawOne(const SdlRecordedDraw &draw, GlesFrameState *state, unsigned int targetWidth, unsigned int targetHeight,
-    const uint8_t *constants, size_t constantsSize)
+static bool DrawOne(const SdlRecordedDraw &draw, const GlesBuffer *stagedBuffer, GlesFrameState *state,
+    unsigned int targetWidth, unsigned int targetHeight, const uint8_t *constants, size_t constantsSize)
 {
     if (draw.Pipeline == NULL) return false;
     GlesPipeline *pipeline = Gles_Pipeline(draw.Pipeline);
@@ -288,13 +288,15 @@ static bool DrawOne(const SdlRecordedDraw &draw, GlesFrameState *state, unsigned
 
     const GlesBuffer *vertices = draw.VertexBuffer != NULL
         ? Gles_Buffer(draw.VertexBuffer)
-        : NULL;
+        : stagedBuffer;
     if (vertices == NULL) {
         fprintf(stderr, "GlesFrame: draw without a vertex buffer\\n");
         return false;
     }
 
-    const GlesBuffer *indices = draw.IndexBuffer != NULL ? Gles_Buffer(draw.IndexBuffer) : NULL;
+    const GlesBuffer *indices = draw.IndexBuffer != NULL
+        ? Gles_Buffer(draw.IndexBuffer)
+        : (draw.IndexSize != 0 ? stagedBuffer : NULL);
     (void)targetWidth;
 
     // Pipeline state is applied here because GLES has no immutable graphics pipeline object.
@@ -515,6 +517,18 @@ bool SdlGpuFrame::Gles_Replay()
     unsigned int clearCommands = 0;
     unsigned int skippedDraws = 0;
     unsigned int executedDraws = 0;
+    GlesBuffer stagedBuffer;
+    memset(&stagedBuffer, 0, sizeof(stagedBuffer));
+    if (!frame->StreamBytes.empty()) {
+        glGenBuffers(1, &stagedBuffer.Name);
+        if (stagedBuffer.Name != 0) {
+            stagedBuffer.Target = GL_ARRAY_BUFFER;
+            stagedBuffer.Size = (uint32_t)frame->StreamBytes.size();
+            glBindBuffer(GL_ARRAY_BUFFER, stagedBuffer.Name);
+            glBufferData(GL_ARRAY_BUFFER, (GLsizeiptr)frame->StreamBytes.size(),
+                &frame->StreamBytes[0].Value, GL_STREAM_DRAW);
+        }
+    }
 
     for (size_t i = 0; i < frame->Commands.size(); ++i) {
         const SdlGpuFrame::Command &command = frame->Commands[i];
@@ -608,7 +622,8 @@ bool SdlGpuFrame::Gles_Replay()
                 ++skippedDraws;
                 continue;
             }
-            if (DrawOne(frame->Draws[command.Draw], state, target.Width, target.Height,
+            if (DrawOne(frame->Draws[command.Draw], stagedBuffer.Name != 0 ? &stagedBuffer : NULL,
+                state, target.Width, target.Height,
                 frame->ConstantBytes.empty() ? NULL : &frame->ConstantBytes[0].Value, frame->ConstantBytes.size())) {
                 ++executedDraws;
             }
@@ -642,6 +657,10 @@ bool SdlGpuFrame::Gles_Replay()
         }
     }
 #endif
+    if (stagedBuffer.Name != 0) {
+        glDeleteBuffers(1, &stagedBuffer.Name);
+        stagedBuffer.Name = 0;
+    }
     glBindFramebuffer(GL_FRAMEBUFFER, 0);
     glFlush();
     const GLenum replayError = glGetError();
