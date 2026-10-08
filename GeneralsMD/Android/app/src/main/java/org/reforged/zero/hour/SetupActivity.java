@@ -878,6 +878,8 @@ public final class SetupActivity extends Activity {
         // Keep native reports. The native side rotates current files during startup/crash.
         File javaCrash = logs == null ? null : new File(logs, "JavaCrashInfo.txt");
         if (javaCrash != null) javaCrash.delete();
+        File javaStartup = logs == null ? null : new File(logs, "JavaStartupTrace.txt");
+        if (javaStartup != null) javaStartup.delete();
 
         try {
             File pending = gameRunPendingFile();
@@ -949,6 +951,7 @@ public final class SetupActivity extends Activity {
         File debugPrev = currentLogs == null ? null : new File(currentLogs, "DebugLogFilePrev.txt");
         File startup = currentLogs == null ? null : new File(currentLogs, "NativeStartupLog.txt");
         File javaCrash = currentLogs == null ? null : new File(currentLogs, "JavaCrashInfo.txt");
+        File javaStartup = currentLogs == null ? null : new File(currentLogs, "JavaStartupTrace.txt");
 
         File legacyCrash = new File(legacyInternal, "ReleaseCrashInfo.txt");
         File legacyDebug = new File(legacyInternal, "DebugLogFile.txt");
@@ -967,7 +970,9 @@ public final class SetupActivity extends Activity {
         long debugTime = Math.max(lastModified(newestDebug), lastModified(debugPrev));
         long startupTime = lastModified(startup);
         long javaCrashTime = lastModified(javaCrash);
-        long latest = Math.max(Math.max(crashTime, debugTime), Math.max(startupTime, javaCrashTime));
+        long javaStartupTime = lastModified(javaStartup);
+        long latest = Math.max(Math.max(crashTime, debugTime),
+                Math.max(Math.max(startupTime, javaCrashTime), javaStartupTime));
 
         if (latest <= 0L) return false;
 
@@ -1007,7 +1012,12 @@ public final class SetupActivity extends Activity {
         if (javaCrashTime > 0L) {
             body.append("===== JAVA CRASH =====\n");
             body.append(javaCrash.getAbsolutePath()).append("\n");
-            body.append(readTail(javaCrash, 6000)).append("\n");
+            body.append(readTail(javaCrash, 6000)).append("\n\n");
+        }
+        if (javaStartupTime > 0L) {
+            body.append("===== JAVA STARTUP TRACE =====\n");
+            body.append(javaStartup.getAbsolutePath()).append("\n");
+            body.append(readTail(javaStartup, 4000)).append("\n");
         }
 
         final String report = body.toString();
