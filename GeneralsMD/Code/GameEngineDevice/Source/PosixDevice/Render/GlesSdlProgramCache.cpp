@@ -252,6 +252,12 @@ const SdlProgram &SdlProgramCache::Make(std::map<std::string, SdlProgram> &cache
         ++Refused;
         fprintf(stderr, "GlesProgramCache: %s program %s refused: %s\n",
             vertex_stage ? "vertex" : "pixel", key.c_str(), program.Refusal.c_str());
+        if (Sdl_Creation_Log_Asked()) {
+            char line[1024];
+            snprintf(line, sizeof(line), "ANDROID GLES PROGRAM REFUSED: stage=%s reason=%s key=%s",
+                vertex_stage ? "vertex" : "pixel", program.Refusal.c_str(), key.c_str());
+            Sdl_Creation_Log_Line(line);
+        }
         return program;
     }
     Sdl_Read_Slot_Lines(hlsl, program.SamplerSlots, program.SlotTexture, program.SlotSampler);
