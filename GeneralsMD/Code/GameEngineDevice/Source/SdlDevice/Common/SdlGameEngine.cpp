@@ -27,8 +27,10 @@
 #include "GameLogic/GameLogic.h"
 #include "SdlDevice/Common/SdlDisplays.h"
 #include "SdlDevice/Common/SdlGameEngine.h"
+#include "Common/CrashHandler.h"
 #include "SdlDevice/Common/SdlMessageBox.h"
 #include "SdlDevice/GameClient/SdlInput.h"
+#include "SdlDevice/GameClient/TouchInput.h"
 #include "SdlDevice/GameClient/SdlMouse.h"
 #include "W3DDevice/GameClient/W3DGameClient.h"
 #include "PosixDevice/Common/PosixFileResolutionDump.h"
@@ -151,8 +153,17 @@ SdlGameEngine::~SdlGameEngine()
 // GameMain calls init( argc, argv ); the argument-less init is empty in GameEngine and nothing calls it.
 void SdlGameEngine::init( int argc, char *argv[] )
 {
+#if defined(__ANDROID__)
+	appendAndroidDiagnostic( "SdlGameEngine::init entered" );
+#endif
 	createWindow();
+#if defined(__ANDROID__)
+	appendAndroidDiagnostic( "SDL game window creation returned" );
+#endif
 	GameEngine::init( argc, argv );
+#if defined(__ANDROID__)
+	appendAndroidDiagnostic( "GameEngine::init returned" );
+#endif
 
 	// P1 step 3: "-dumpFileResolution <file>" writes where every path resolves, then ends the run
 	// (test_packaging_resolution compares two layouts' dumps).  A test switch, never a player's.
@@ -185,12 +196,22 @@ void SdlGameEngine::createWindow( void )
 
 	if (!SDL_Init( SDL_INIT_VIDEO ))
 	{
+#if defined(__ANDROID__)
+		{
+			char diagnostic[512];
+			snprintf(diagnostic, sizeof(diagnostic), "SDL_Init failed: %s", SDL_GetError());
+			appendAndroidDiagnostic(diagnostic);
+		}
+#endif
 		char why[ 512 ];
 		snprintf( why, sizeof( why ), "SDL could not start its video subsystem: %s", SDL_GetError() );
 		RELEASE_CRASH( why );
 		return;
 	}
 	m_sdlVideoStarted = TRUE;
+#if defined(__ANDROID__)
+	appendAndroidDiagnostic( "SDL video subsystem initialized" );
+#endif
 	ThePlatformDisplays = &TheSdlDisplays;		// Monitors.h answers from SDL's displays from here on
 
 	/* The window's drawable in pixels, not points.  The game's sizes are pixels (SdlDisplays.h), and without
@@ -199,6 +220,17 @@ void SdlGameEngine::createWindow( void )
 		 mapped from the window's points (SdlInput_toGamePixels).  Where points are pixels (X11, gamescope) this
 		 changes nothing. */
 	SDL_WindowFlags flags = SDL_WINDOW_HIGH_PIXEL_DENSITY;
+#if defined(__ANDROID__)
+	// SDL3 requires OpenGL context attributes to be set before the OpenGL window is created.
+	// Android uses the GLES 3.0 path implemented by GlesSdlGpuFrame.
+	SDL_GL_SetAttribute( SDL_GL_CONTEXT_PROFILE_MASK, SDL_GL_CONTEXT_PROFILE_ES );
+	SDL_GL_SetAttribute( SDL_GL_CONTEXT_MAJOR_VERSION, 3 );
+	SDL_GL_SetAttribute( SDL_GL_CONTEXT_MINOR_VERSION, 0 );
+	SDL_GL_SetAttribute( SDL_GL_DOUBLEBUFFER, 1 );
+	SDL_GL_SetAttribute( SDL_GL_DEPTH_SIZE, 24 );
+	SDL_GL_SetAttribute( SDL_GL_STENCIL_SIZE, 8 );
+	flags = (SDL_WindowFlags)(flags | SDL_WINDOW_OPENGL);
+#endif
 	if (!m_request.windowed)
 		flags |= SDL_WINDOW_FULLSCREEN;
 	if (m_request.hidden)
@@ -217,6 +249,13 @@ void SdlGameEngine::createWindow( void )
 	m_window = SDL_CreateWindow( "Command and Conquer Generals Zero Hour", width, height, flags );
 	if (m_window == NULL)
 	{
+#if defined(__ANDROID__)
+		{
+			char diagnostic[512];
+			snprintf(diagnostic, sizeof(diagnostic), "SDL_CreateWindow failed: %s", SDL_GetError());
+			appendAndroidDiagnostic(diagnostic);
+		}
+#endif
 		char why[ 512 ];
 		snprintf( why, sizeof( why ), "SDL could not create the game's window: %s", SDL_GetError() );
 		RELEASE_CRASH( why );
@@ -225,6 +264,9 @@ void SdlGameEngine::createWindow( void )
 	DEBUG_LOG(( "SdlGameEngine: window %dx%d, %s%s%s\n", width, height,
 		m_request.windowed ? "windowed" : "fullscreen", m_request.borderless ? ", borderless" : "",
 		m_request.hidden ? ", hidden" : "" ));
+#if defined(__ANDROID__)
+	appendAndroidDiagnostic( "SDL game window created successfully" );
+#endif
 
 	s_titledWindow = m_window;
 	TheApplicationWindowTitleHook = setTitleOfWindow;
@@ -339,6 +381,9 @@ void SdlGameEngine::serviceWindowsOS( void )
 
 			case SDL_EVENT_WINDOW_FOCUS_LOST:
 				setIsActive( FALSE );
+#if defined(__ANDROID__)
+				TouchInput::reset();
+#endif
 				break;
 
 			default:
@@ -346,6 +391,9 @@ void SdlGameEngine::serviceWindowsOS( void )
 				break;
 		}
 	}
+#if defined(__ANDROID__)
+	TouchInput::update((UnsignedInt)(SDL_GetTicks()));
+#endif
 }
 
 // Win32GameEngine's factories, the same W3D classes (decision 8); the radar too: W3DRadar, and

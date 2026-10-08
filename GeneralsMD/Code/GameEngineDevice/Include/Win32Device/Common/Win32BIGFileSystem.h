@@ -56,6 +56,9 @@ public:
 	virtual Bool loadBigFilesFromDirectory(AsciiString dir, AsciiString fileMask, Bool overwrite = FALSE, Bool searchSubdirectories = TRUE);
 protected:
 
+private:
+	Bool loadBaseGameArchivesFromPath(const AsciiString &path);
+
 };
 
 #endif // __WIN32BIGFILESYSTEM_H

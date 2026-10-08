@@ -3302,15 +3302,17 @@ void MemoryPoolFactory::debugMemoryReport(Int flags, Int startCheckpoint, Int en
 	these definitions of new/delete) ahead of all others. (We do debug checking
 	to ensure that's the case)
 */
-#if defined(_DEBUG)
+#if defined(_MSC_VER)
+#  if defined(_DEBUG)
 	#pragma comment(lib, "GameEngineDebug")
-#elif defined(_INTERNAL)
+#  elif defined(_INTERNAL)
 	#pragma comment(lib, "GameEngineInternal")
-#else
+#  else
 	#pragma comment(lib, "GameEngine")
+#  endif
 #endif
 
-#ifdef MEMORYPOOL_OVERRIDE_MALLOC
+#if defined(_MSC_VER) && defined(MEMORYPOOL_OVERRIDE_MALLOC)
 	#pragma comment(linker, "/force:multiple")
 #endif
 

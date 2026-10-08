@@ -83,7 +83,9 @@ class STLSpecialAlloc;
 #include <stdlib.h>
 #include <string.h>
 #include <sys/stat.h>
+#if !defined(__ANDROID__)
 #include <sys/timeb.h>
+#endif
 #include <sys/types.h>
 #include <TCHAR.H>
 #include <time.h>
@@ -114,7 +116,9 @@ class STLSpecialAlloc;
 #include <stdlib.h>
 #include <string.h>
 #include <sys/stat.h>
+#if !defined(__ANDROID__)
 #include <sys/timeb.h>
+#endif
 #include <sys/types.h>
 #include <time.h>
 #include <wchar.h>

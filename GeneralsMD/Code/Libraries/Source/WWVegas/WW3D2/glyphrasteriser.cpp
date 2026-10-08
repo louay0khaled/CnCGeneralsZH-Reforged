@@ -31,7 +31,7 @@
 #include FT_TRUETYPE_TABLES_H
 #include FT_TRUETYPE_TAGS_H
 
-#if !defined(__APPLE__) || defined(ZH_GLYPHS_USE_FONTCONFIG)
+#if !defined(__APPLE__) && !defined(__ANDROID__) || defined(ZH_GLYPHS_USE_FONTCONFIG)
 #include <fontconfig/fontconfig.h>
 #define ZH_GLYPHS_FONTCONFIG 1
 #endif
@@ -270,6 +270,21 @@ bool resolve( const char *face, bool bold, std::string &path, bool &fileIsBold, 
 #if defined(ZH_GLYPHS_FONTCONFIG)
 	metricsFace = s.gdiMetrics;
 	return fontconfigFile( s.linuxFamily, bold, path, fileIsBold );
+#elif defined(__ANDROID__)
+	// Android exposes a stable system-font directory for FreeType. We deliberately do not depend on
+	// fontconfig or Android Java font APIs in the native core. Roboto is the platform fallback used for
+	// the game's Arial/Times/Courier families; bold is selected when the platform file exists.
+	const char *regular = "/system/fonts/Roboto-Regular.ttf";
+	const char *boldFile = "/system/fonts/Roboto-Bold.ttf";
+	if (bold && fileExists( boldFile ))
+	{
+		path = boldFile;
+		fileIsBold = true;
+		return true;
+	}
+	path = regular;
+	fileIsBold = false;
+	return fileExists( path.c_str() );
 #else
 	const char *directory = "/System/Library/Fonts/Supplemental/";
 	if (bold && s.macBold != NULL && fileExists( (std::string( directory ) + s.macBold).c_str() ))

@@ -485,8 +485,14 @@ static bool is_dynamic(IDirect3DIndexBuffer9 *buffer)
 void PosixDevice9::Refuse_Draw(const std::string &reason)
 {
 	unsigned int &count = DrawRefusals[reason];
-	if (count++ == 0) {
+	const unsigned int before = count++;
+	if (before == 0) {
 		fprintf(stderr, "PosixDevice9: a draw refused: %s\n", reason.c_str());
+		if (Sdl_Creation_Log_Asked()) {
+			char line[768];
+			snprintf(line, sizeof(line), "ANDROID DRAW REFUSED: %s", reason.c_str());
+			Sdl_Creation_Log_Line(line);
+		}
 	}
 }
 
@@ -709,6 +715,17 @@ RenderResult PosixDevice9::DrawPrimitiveUP(D3DPRIMITIVETYPE type, unsigned int p
 
 RenderResult PosixDevice9::Gpu_Draw(const DrawCall &call)
 {
+	// Android GLES diagnosis: keep a tiny sample of attempts in the same buffered log as the replay.
+	static unsigned int androidDrawAttempts = 0;
+	const unsigned int androidAttempt = ++androidDrawAttempts;
+	if (androidAttempt <= 24 && Sdl_Creation_Log_Asked()) {
+		char line[512];
+		snprintf(line, sizeof(line),
+			"ANDROID DRAW ATTEMPT %u: prim=%u count=%u indexed=%u FVF=0x%x VS=%p PS=%p stream0=%p index=%p",
+			androidAttempt, (unsigned)call.Type, call.PrimitiveCount, call.Indexed ? 1u : 0u,
+			(unsigned)FVF, VertexShader, PixelShader, Streams[0], Indices);
+		Sdl_Creation_Log_Line(line);
+	}
 	// PERF1: the CPU time spent here, added to the frame's when ZH_GPU_TIMING asks.
 	struct DrawTimer
 	{
@@ -1119,6 +1136,12 @@ RenderResult PosixDevice9::Gpu_Draw(const DrawCall &call)
 	draw.BlendFactor = RenderStates[D3DRS_BLENDFACTOR];
 	Gpu->Record_Draw(draw);
 	++DrawsRecorded;
+	if (DrawsRecorded <= 24 && Sdl_Creation_Log_Asked()) {
+		char line[256];
+		snprintf(line, sizeof(line), "ANDROID RECORD_DRAW %u: prim=%u count=%u indexed=%u",
+			DrawsRecorded, (unsigned)call.Type, draw.Count, call.Indexed ? 1u : 0u);
+		Sdl_Creation_Log_Line(line);
+	}
 	if (vertex_engine != ENGINE_SHADER_NONE || pixel_engine != ENGINE_SHADER_NONE) {
 		++EngineProgramDraws[EngineShader_Name((EngineShaderProgram)(vertex_engine != ENGINE_SHADER_NONE
 			? vertex_engine : pixel_engine))];

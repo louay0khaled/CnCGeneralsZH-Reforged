@@ -147,6 +147,14 @@ install_zlib() {
   fi
   local archive source
   archive=$(get_file 'https://zlib.net/fossils/zlib-1.1.4.tar.gz' "$work/zlib-1.1.4.tar.gz")
+  # zlib.net may return a successful HTTP response containing an HTML/rate-limit page from
+  # GitHub-hosted runners. Do not let that poison the cache: validate the gzip stream and fall
+  # back to the community's exact zlib 1.1.4 mirror, which is a single-commit source snapshot.
+  if ! gzip -t "$archive" >/dev/null 2>&1; then
+    step 'official zlib fossil was not a valid gzip archive; using the zlib 1.1.4 GitHub mirror'
+    rm -f "$archive"
+    archive=$(get_file 'https://github.com/TheSuperHackers/zlib-1.1.4/archive/refs/heads/main.zip' "$work/zlib-1.1.4.zip")
+  fi
   source=$(expand_source "$archive" 'zlib')
   local IFS=$'\n'
   copy_files "$destination" $(list_top_level "$source" '.c,.h' 'maketree.c')
@@ -385,6 +393,23 @@ install_gamespy_unix_patch() {
     exit 1
   fi
   step "gamespy-gsi-unix.patch -> Libraries/Source/GameSpy"
+}
+
+# --- Android's bionic pthreads do not expose pthread_cancel, while the pinned GameSpy SDK's
+# Linux implementation calls it. Apply this only to Android vendor runs; desktop Linux keeps the
+# upstream pthread cancellation semantics unchanged.
+install_gamespy_android_patch() {
+  local destination="$libraries/Source/GameSpy"
+  local source="$destination/src/common/linux/gsthreadlinux.c"
+  local patch="$libraries/Source/gamespy-android-pthread-cancel.patch"
+  if [ "${ZH_ANDROID:-0}" != "1" ]; then return 0; fi
+  if grep -q 'Android.*bionic pthread' "$source" 2>/dev/null; then return 0; fi
+  GIT_CEILING_DIRECTORIES="$libraries/Source"     git -C "$destination" -c core.autocrlf=false apply "$patch" || true
+  if ! grep -q 'Android.*bionic pthread' "$source" 2>/dev/null; then
+    echo "[vendor] gamespy-android-pthread-cancel.patch did not apply to Libraries/Source/GameSpy" >&2
+    exit 1
+  fi
+  step "gamespy-android-pthread-cancel.patch -> Libraries/Source/GameSpy"
 }
 
 # --- FFmpeg. Not fetched by either script: Libraries/Source/FFmpeg/dist is committed, and it is a
@@ -772,6 +797,7 @@ report_directx
 install_gamespy
 install_gamespy_patch
 install_gamespy_unix_patch
+install_gamespy_android_patch
 install_litehtml
 install_litehtml_patch
 install_nanosvg

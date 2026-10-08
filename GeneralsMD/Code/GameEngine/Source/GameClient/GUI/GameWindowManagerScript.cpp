@@ -531,7 +531,7 @@ static Bool barLaysOutItself( const char *filename )
 {
 	static const char *const own[] = { "controlbar.wnd", "generalsexppoints.wnd", "genpowersshortcutbar" };
 	for( Int i = 0; i < (Int)ARRAY_SIZE( own ); i++ )
-		if( strnicmp( filename, own[ i ], strlen( own[ i ] ) ) == 0 )
+		if( strncasecmp( filename, own[ i ], strlen( own[ i ] ) ) == 0 )
 			return TRUE;
 	return FALSE;
 }

@@ -42,9 +42,11 @@
 
 #include <SDL3/SDL.h>
 
-#include <cxxabi.h>
 #include <dlfcn.h>
+#if !defined(__ANDROID__)
+#include <cxxabi.h>
 #include <execinfo.h>
+#endif
 #include <mutex>
 #include <string>
 
@@ -265,6 +267,10 @@ void Sdl_Creation_Log(const char *what, double started_ms, double took_ms, const
 
 void Sdl_Creation_Log_Trace(const char *what)
 {
+#if defined(__ANDROID__)
+	// The desktop trace uses glibc execinfo/backtrace diagnostics, which are not available in the Android build.
+	(void)what;
+#else
 	void *frames[12];
 	const int count = backtrace(frames, 12);
 	std::string line = std::string("PosixDevice9 create: trace ") + what + ":";
@@ -277,7 +283,6 @@ void Sdl_Creation_Log_Trace(const char *what)
 			demangled = abi::__cxa_demangle(info.dli_sname, NULL, NULL, &status);
 			name = (demangled != NULL && status == 0) ? demangled : info.dli_sname;
 		}
-		// The function's name without its parameters: the line is for reading.
 		std::string shown(name);
 		const size_t parameters = shown.find('(');
 		if (parameters != std::string::npos) {
@@ -288,6 +293,7 @@ void Sdl_Creation_Log_Trace(const char *what)
 		free(demangled);
 	}
 	Sdl_Creation_Log_Line(line.c_str());
+#endif
 }
 
 void Sdl_Creation_Log_Flush()

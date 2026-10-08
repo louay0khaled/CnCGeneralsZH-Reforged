@@ -167,6 +167,75 @@ static void activateThisApp()
 static void activateThisApp() {}
 #endif
 
+#if defined(__ANDROID__)
+/*
+ * Select the normal app-specific external-files directory. This matches Java's
+ * Context.getExternalFilesDir(null).
+ *
+ * ZH_USER_DATA_DIR feeds normal engine saves/settings. ZH_ANDROID_DIAGNOSTICS_DIR is a
+ * separate true-POSIX path for Debug.cpp, crash reports, and the startup trace.
+ */
+static void configureAndroidUserDataDirectory()
+{
+	static bool configured = false;
+	if (configured)
+		return;
+
+	const char *external = SDL_GetAndroidExternalStoragePath();
+	const char *internal = SDL_GetAndroidInternalStoragePath();
+	const char *base = (external != NULL && external[0] != '\0') ? external : internal;
+	if (base == NULL || base[0] == '\0')
+	{
+		fprintf( stderr, "WARNING: Android app storage path is unavailable; native diagnostics may be lost.\\n" );
+		return;
+	}
+
+	static char userData[ PATH_MAX ];
+	static char diagnostics[ PATH_MAX ];
+	const int userWritten = snprintf( userData, sizeof( userData ), "%s/ZeroHourData", base );
+	const int logWritten = snprintf( diagnostics, sizeof( diagnostics ), "%s/Logs", userData );
+	if (userWritten <= 0 || userWritten >= (int)sizeof( userData) ||
+			logWritten <= 0 || logWritten >= (int)sizeof( diagnostics))
+	{
+		fprintf( stderr, "WARNING: Android user-data path is too long; native diagnostics may be lost.\\n" );
+		return;
+	}
+
+	if (mkdir( userData, 0777 ) != 0 && errno != EEXIST)
+	{
+		fprintf( stderr, "WARNING: could not create Android user-data directory %s: %s\\n",
+			userData, strerror( errno) );
+		return;
+	}
+	if (mkdir( diagnostics, 0777 ) != 0 && errno != EEXIST)
+	{
+		fprintf( stderr, "WARNING: could not create Android diagnostics directory %s: %s\\n",
+			diagnostics, strerror( errno) );
+		return;
+	}
+
+	if (setenv( "ZH_USER_DATA_DIR", userData, 1 ) != 0 ||
+			setenv( "ZH_ANDROID_DIAGNOSTICS_DIR", diagnostics, 1 ) != 0)
+	{
+		fprintf( stderr, "WARNING: could not configure Android writable paths.\\n" );
+		return;
+	}
+
+	char startup[ PATH_MAX ];
+	char startupPrev[ PATH_MAX ];
+	snprintf( startup, sizeof( startup ), "%s/NativeStartupLog.txt", diagnostics );
+	snprintf( startupPrev, sizeof( startupPrev ), "%s/NativeStartupLogPrev.txt", diagnostics );
+	unlink( startupPrev );
+	rename( startup, startupPrev );
+
+	configured = true;
+	appendAndroidDiagnostic( "Android writable storage configured" );
+	fprintf( stderr, "INFO: Android writable user-data directory: %s\\n", userData );
+	fprintf( stderr, "INFO: Android diagnostics directory: %s\\n", diagnostics );
+}
+
+#endif
+
 /** Whether this runs in the Steam Deck's Game Mode (P3): gamescope's session names itself in
 	* XDG_CURRENT_DESKTOP, and Steam's gamepad interface sets SteamGamepadUI for what it starts.  A file
 	* dialog may not show there, so PosixMain asks for -root in Steam's launch options instead.  (Both names
@@ -279,6 +348,80 @@ static bool chooseFolderFromScript( PosixInstallQuestion question, const std::st
 	* EarlyCommandLine.h, whose values end at a space, because a path may have one. */
 static Bool chooseInstallRoot( int argc, char *argv[], const std::vector<std::string> &overlays, char *out, size_t outSize )
 {
+#if defined(__ANDROID__)
+	// Android's Java shell owns the folder picker and storage permission. It writes a small
+	// ready marker containing the user's real Zero Hour install path. The native engine waits
+	// here because the SAF UI is asynchronous; once the marker is valid, the normal POSIX
+	// install validator gets the exact same final say as desktop builds.
+	for (int i = 1; i + 1 < argc; ++i)
+	{
+		if (strcasecmp( argv[i], "-root" ) == 0)
+		{
+			const std::string explicitRoot( argv[i + 1] );
+			if (explicitRoot.size() + 1 <= outSize)
+			{
+				strcpy( out, explicitRoot.c_str() );
+				return TRUE;
+			}
+		}
+	}
+
+	const char *external = SDL_GetAndroidExternalStoragePath();
+	if (external != NULL && external[0] != '\0')
+	{
+		const std::string base( external );
+		const std::string ready = base + "/.zh-game-root";
+		const std::string cancelled = base + "/.zh-game-root.cancelled";
+
+		for (int attempt = 0; attempt < 1200; ++attempt) // up to 5 minutes for the permission/picker UI
+		{
+			if (access( cancelled.c_str(), F_OK ) == 0)
+			{
+				fprintf( stderr, "generals: Android game-folder setup cancelled by the user\n" );
+				return FALSE;
+			}
+
+			FILE *fp = fopen( ready.c_str(), "r" );
+			if (fp != NULL)
+			{
+				char line[ PATH_MAX ];
+				if (fgets( line, sizeof( line ), fp ) != NULL)
+				{
+					size_t n = strlen( line );
+					while (n > 0 && (line[n - 1] == '\n' || line[n - 1] == '\r'))
+						line[--n] = '\0';
+					std::string selected( line );
+					if (!selected.empty() && PosixCheckInstallFolder( selected, overlays ) == INSTALL_OK)
+					{
+						if (selected.size() + 1 > outSize)
+						{
+							fclose( fp );
+							fprintf( stderr, "generals: Android game root path is too long\n" );
+							return FALSE;
+						}
+						fclose( fp );
+						strcpy( out, selected.c_str() );
+						fprintf( stderr, "generals: Android game root %s\n", out );
+						return TRUE;
+					}
+				}
+				fclose( fp );
+			}
+			SDL_Delay( 250 );
+		}
+	}
+
+	const char *where = external != NULL ? external : "(Android external-files directory unavailable)";
+	char problem[ 1400 ];
+	snprintf( problem, sizeof( problem ),
+		"Zero Hour Reforged could not finish game-folder setup.\n\n"
+		"Open the app again and choose the Zero Hour folder, the one containing INIZH.big. "
+		"The original Generals files such as Textures.big are loaded separately from Generals/ZH_Generals.\n\n"
+		"EA game data is not included with this application." );
+	fprintf( stderr, "generals: %s (state directory: %s)\n", problem, where );
+	SDL_ShowSimpleMessageBox( SDL_MESSAGEBOX_ERROR, "Zero Hour Reforged", problem, NULL );
+	return FALSE;
+#else
 	PosixInstallRequest request;
 	Bool unattended = FALSE;
 	for (int i = 1; i < argc; ++i)
@@ -346,6 +489,7 @@ static Bool chooseInstallRoot( int argc, char *argv[], const std::vector<std::st
 		return FALSE;
 	strcpy( out, choice.root.c_str() );
 	return TRUE;
+#endif
 }
 
 /** A package's art overlay, the macOS app's or a Linux package's: "<user data>/ReforgedArt", when it is a
@@ -377,6 +521,28 @@ static void appendUserArtOverlay( std::vector<std::string> &overlays )
 	* that is not a directory. */
 static Bool chooseOverlays( int argc, char *argv[], std::vector<std::string> &overlays )
 {
+#if defined(__ANDROID__)
+	// The APK carries the fork's own Data tree. SetupActivity extracts it to private app
+	// storage before native startup; add it as the first normal POSIX overlay so Data\\INI,
+	// Data\\Window, scripts, scenarios and Reforged UI assets work without touching Steam data.
+	const char *androidInternal = SDL_GetAndroidInternalStoragePath();
+	if (androidInternal != NULL && androidInternal[0] != '\0')
+	{
+		const std::string candidate = std::string(androidInternal) + "/ReforgedData";
+		char real[ PATH_MAX ];
+		struct stat status;
+		if (realpath(candidate.c_str(), real) != NULL && stat(real, &status) == 0 && S_ISDIR(status.st_mode))
+		{
+			overlays.push_back(real);
+			fprintf(stderr, "INFO: Android Reforged data overlay: %s\n", real);
+		}
+		else
+		{
+			fprintf(stderr, "WARNING: Android Reforged data overlay is unavailable: %s\n", candidate.c_str());
+		}
+	}
+#endif
+
 	for (int i = 1; i + 1 < argc; ++i)
 	{
 		if (strcasecmp( argv[i], "-overlay" ) != 0)
@@ -437,9 +603,17 @@ static Bool takeOneCopyLock( void )
 //=============================================================================
 int main( int argc, char *argv[] )
 {
-	// Before anything else, and before another thread exists: a crash from here on leaves
-	// ReleaseCrashInfo.txt, as WinMain's _set_se_translator and SetUnhandledExceptionFilter make it on Windows.
+#if defined(__ANDROID__)
+	// SDL is initialized by the time SDLActivity enters the native main path, so
+	// storage discovery belongs here rather than in an ELF constructor.
+	configureAndroidUserDataDirectory();
+	appendAndroidDiagnostic( "main() entered" );
+#endif
+
 	installCrashHandlers();
+#if defined(__ANDROID__)
+	appendAndroidDiagnostic( "signal crash handlers installed" );
+#endif
 
 	// The one locale category the game may set (a port rule; C2): dates in the replay and save
 	// lists in the user's format.  LC_NUMERIC would change how the INI parser reads decimals.
@@ -464,7 +638,85 @@ int main( int argc, char *argv[] )
 			fprintf( stderr, "generals: cannot use '%s' as the install root: %s\n", root, strerror( errno ) );
 			return 1;
 		}
+#if defined(__ANDROID__)
+		appendAndroidDiagnostic( "install root selected and chdir succeeded" );
+#endif
+
+#if defined(__ANDROID__)
+		// Android has two physical asset roots in the supported Steam layout:
+		//   <Zero Hour>/INIZH.big
+		//   <Zero Hour>/ZH_Generals/Textures.big
+		// The engine mounts both into one virtual archive tree. The Java setup
+		// writes the exact Base Generals path, while this native fallback makes
+		// the standard ZH_Generals layout work even if app state was cleared.
+		bool androidBaseRootSet = false;
+		{
+			const char *external = SDL_GetAndroidExternalStoragePath();
+			if (external != NULL && external[0] != '\0')
+			{
+				char baseMarker[PATH_MAX];
+				snprintf(baseMarker, sizeof(baseMarker), "%s/.zh-base-generals-root", external);
+				FILE *fp = fopen(baseMarker, "r");
+				if (fp != NULL)
+				{
+					char basePath[PATH_MAX];
+					if (fgets(basePath, sizeof(basePath), fp) != NULL)
+					{
+						size_t n = strlen(basePath);
+						while (n > 0 && (basePath[n - 1] == '\n' || basePath[n - 1] == '\r'))
+							basePath[--n] = '\0';
+
+						struct stat st;
+						if (n > 0 && stat(basePath, &st) == 0 && S_ISDIR(st.st_mode))
+						{
+							setenv("CNC_GENERALS_PATH", basePath, 1);
+							androidBaseRootSet = true;
+							fprintf(stderr, "INFO: Android base Generals root from setup: %s\n", basePath);
+						}
+						else
+						{
+							fprintf(stderr, "WARNING: Android base Generals marker points to invalid folder: %s\n", basePath);
+						}
+					}
+					fclose(fp);
+				}
+			}
+		}
+
+		if (!androidBaseRootSet)
+		{
+			const char *baseCandidates[] = {
+				"ZH_Generals",
+				"z_generals",
+				"Generals",
+				"../Command & Conquer Generals",
+				"../Command & Conquer(tm) Generals"
+			};
+
+			for (size_t i = 0; i < sizeof(baseCandidates) / sizeof(baseCandidates[0]); ++i)
+			{
+				char texturesPath[PATH_MAX];
+				struct stat st;
+				snprintf(texturesPath, sizeof(texturesPath), "%s/Textures.big", baseCandidates[i]);
+				if (stat(texturesPath, &st) == 0 && S_ISREG(st.st_mode))
+				{
+					setenv("CNC_GENERALS_PATH", baseCandidates[i], 1);
+					androidBaseRootSet = true;
+					fprintf(stderr, "INFO: Android auto-detected Base Generals folder: %s\n", baseCandidates[i]);
+					break;
+				}
+			}
+		}
+
+		if (!androidBaseRootSet)
+			fprintf(stderr, "WARNING: Android could not locate Base Generals Textures.big beside the selected Zero Hour root\n");
+
+		fprintf(stderr, "INFO: Android Zero Hour root: %s\n", root);
+#endif
 		PosixPath_Set_Overlays( overlays );
+#if defined(__ANDROID__)
+		appendAndroidDiagnostic( "file overlays configured" );
+#endif
 		for (size_t i = 0; i < overlays.size(); ++i)
 			fprintf( stderr, "generals: overlay %s, searched before the install\n", overlays[i].c_str() );
 		// The roots are read-only (P1 step 2): nothing the engine addresses relative to the install, the
@@ -546,7 +798,13 @@ int main( int argc, char *argv[] )
 
 		// start the log
 		DEBUG_INIT(DEBUG_FLAGS_DEFAULT);
+#if defined(__ANDROID__)
+		appendAndroidDiagnostic( "DEBUG_INIT completed" );
+#endif
 		initMemoryManager();
+#if defined(__ANDROID__)
+		appendAndroidDiagnostic( "memory manager initialized" );
+#endif
 
 		// Set up version info
 		TheVersion = NEW Version;
@@ -571,7 +829,13 @@ int main( int argc, char *argv[] )
 		DEBUG_LOG(("CRC message is %d\n", GameMessage::MSG_LOGIC_CRC));
 
 		// run the game main loop
+#if defined(__ANDROID__)
+		appendAndroidDiagnostic( "entering GameMain" );
+#endif
 		GameMain(argc, argv);
+#if defined(__ANDROID__)
+		appendAndroidDiagnostic( "GameMain returned normally" );
+#endif
 		SdlGameEngine_releaseWindow();		// after the engine, as WinMain's DestroyWindow
 
 		delete TheVersion;

@@ -69,12 +69,16 @@
 #include <string.h>
 #include <time.h>
 #include <unistd.h>
+#include <sys/stat.h>
 
 #if defined(__APPLE__)
 #include <mach-o/dyld.h>
 #include <sys/ucontext.h>
-#elif defined(__linux__)
+#elif defined(__linux__) && !defined(__ANDROID__)
 #include <execinfo.h>
+#include <link.h>
+#include <ucontext.h>
+#elif defined(__ANDROID__)
 #include <link.h>
 #include <ucontext.h>
 #else
@@ -465,6 +469,12 @@ unsigned int collectFrames( uintptr_t pc, uintptr_t fp, uintptr_t lr, uintptr_t 
 			break;					// the chain only climbs; anything else is not a frame record
 		frame = next;
 	}
+#elif defined(__ANDROID__)
+	(void)fp;
+	// Android's NDK does not provide the glibc execinfo backtrace() API used by the desktop Linux port.
+	// Keep the signal-safe crash report useful with the PC and link register captured from ucontext.
+	if (lr != 0 && count < MAX_FRAMES && (count == 0 || frames[ count - 1 ] != lr))
+		frames[ count++ ] = lr;
 #else
 	(void)fp;
 	(void)lr;
@@ -655,6 +665,34 @@ void handleTerminate( void )
 
 } // namespace
 
+#if defined(__ANDROID__)
+void appendAndroidDiagnostic( const char *message )
+{
+	const char *directory = getenv( "ZH_ANDROID_DIAGNOSTICS_DIR" );
+	if (directory == NULL || directory[0] == '\0' || message == NULL)
+		return;
+
+	char path[ 4096 ];
+	const int pathLength = snprintf( path, sizeof( path ), "%s/NativeStartupLog.txt", directory );
+	if (pathLength <= 0 || pathLength >= (int)sizeof( path ))
+		return;
+
+	const int fd = open( path, O_WRONLY | O_CREAT | O_APPEND, 0644 );
+	if (fd < 0)
+		return;
+
+	char line[ 4096 ];
+	const int lineLength = snprintf( line, sizeof( line ), "[%lld] %s\\n",
+		(long long)time( NULL ), message );
+	if (lineLength > 0)
+		(void)write( fd, line, (size_t)lineLength < sizeof( line ) ? (size_t)lineLength : sizeof( line ) - 1);
+	fsync( fd );
+	close( fd );
+}
+#else
+void appendAndroidDiagnostic( const char *) {}
+#endif
+
 //-------------------------------------------------------------------------------------------------
 // Install
 //-------------------------------------------------------------------------------------------------
@@ -677,21 +715,111 @@ void setCrashLogDescriptor( int fd )
 	s_logFd.store( fd );
 }
 
+#if defined(__ANDROID__)
+/*
+ * The crash handler must be usable while libmain.so is being loaded. At that point
+ * SDL's Android JNI state is not guaranteed to exist yet, so this path discovery
+ * deliberately uses only the Linux/Android process interface and normal POSIX I/O.
+ *
+ * Android app-specific external files are:
+ *   /storage/emulated/<user>/Android/data/<package>/files
+ * The per-user portion is derived from the Linux UID and the package from
+ * /proc/self/cmdline. This matches Context.getExternalFilesDir(null) for the
+ * application id used by this project, while also working from the isolated :game process.
+ */
+bool prepareEarlyAndroidDiagnosticsPath( char *diagnostics, size_t diagnosticsSize )
+{
+	if (diagnostics == NULL || diagnosticsSize == 0)
+		return false;
+
+	char package[ 256 ];
+	memset( package, 0, sizeof( package ) );
+	int fd = open( "/proc/self/cmdline", O_RDONLY | O_CLOEXEC );
+	ssize_t readCount = fd >= 0 ? read( fd, package, sizeof( package ) - 1 ) : -1;
+	if (fd >= 0)
+		close( fd );
+
+	if (readCount <= 0 || package[0] == '\0')
+	{
+		strncpy( package, "com.louay.generalszh", sizeof( package ) - 1 );
+	}
+	else
+	{
+		package[ sizeof( package ) - 1 ] = '\0';
+		for (size_t i = 0; i < sizeof( package ) - 1 && package[i] != '\0'; ++i)
+		{
+			if (package[i] == ':')
+			{
+				package[i] = '\0';
+				break;
+			}
+		}
+		if (package[0] == '\0' || strchr( package, '/' ) != NULL)
+			strncpy( package, "com.louay.generalszh", sizeof( package ) - 1 );
+	}
+
+	const unsigned long androidUser = (unsigned long)getuid() / 100000UL;
+	char appExternal[ 4096 ];
+	char userData[ 4096 ];
+	int n = snprintf( appExternal, sizeof( appExternal ),
+		"/storage/emulated/%lu/Android/data/%s/files", androidUser, package );
+	if (n <= 0 || n >= (int)sizeof( appExternal ))
+		return false;
+
+	n = snprintf( userData, sizeof( userData ), "%s/ZeroHourData", appExternal );
+	if (n <= 0 || n >= (int)sizeof( userData ))
+		return false;
+	n = snprintf( diagnostics, diagnosticsSize, "%s/Logs", userData );
+	if (n <= 0 || n >= (int)diagnosticsSize)
+		return false;
+
+	if (mkdir( appExternal, 0777 ) != 0 && errno != EEXIST)
+		return false;
+	if (mkdir( userData, 0777 ) != 0 && errno != EEXIST)
+		return false;
+	if (mkdir( diagnostics, 0777 ) != 0 && errno != EEXIST)
+		return false;
+
+	if (setenv( "ZH_USER_DATA_DIR", userData, 1 ) != 0 ||
+			setenv( "ZH_ANDROID_DIAGNOSTICS_DIR", diagnostics, 1 ) != 0)
+		return false;
+	return true;
+}
+#endif
+
 void installCrashHandlers( void )
 {
 	if (s_installed)
+	{
+		// The early constructor can run on SDL/Android's loader thread, while SDL
+		// may invoke the real game main on its dedicated game thread. Rebind the
+		// per-thread crash state when main() calls us again.
+		s_mainThread = pthread_self();
+		installThreadCrashStack();
 		return;
+	}
 	s_installed = true;
 	s_mainThread = pthread_self();
 
-	// The crash file's path: the user data folder, which findUserDataDirectory spells the engine's way,
-	// with a separator at the end - a real POSIX directory otherwise.
+	// Android has one explicit, normal app-specific diagnostics directory shared with Java.
+	// Never derive it from findUserDataDirectory() because that API deliberately returns an
+	// engine-style trailing '\\' separator on POSIX.
 	char folder[ 4096 ];
 	s_crashPath[0] = s_previousPath[0] = 0;
+#if defined(__ANDROID__)
+	const char *androidLogs = getenv( "ZH_ANDROID_DIAGNOSTICS_DIR" );
+	if (androidLogs != NULL && androidLogs[0] != '\0')
+	{
+		if (snprintf( folder, sizeof( folder ), "%s", androidLogs ) > 0)
+			mkdir( folder, 0777 );
+	}
+	else if (prepareEarlyAndroidDiagnosticsPath( folder, sizeof( folder ) ))
+#else
 	if (findUserDataDirectory( folder, sizeof( folder ) ))
+#endif
 	{
 		size_t length = strlen( folder );
-		if (length > 0 && (folder[ length - 1 ] == '\\' || folder[ length - 1 ] == '/'))
+		while (length > 0 && (folder[ length - 1 ] == '\\' || folder[ length - 1 ] == '/' ))
 			folder[ --length ] = 0;
 		snprintf( s_crashPath, sizeof( s_crashPath ), "%s/ReleaseCrashInfo.txt", folder );
 		snprintf( s_previousPath, sizeof( s_previousPath ), "%s/ReleaseCrashInfoPrev.txt", folder );
@@ -715,7 +843,7 @@ void installCrashHandlers( void )
 		// backtrace()'s unwinder, whose first call allocates.
 		Dl_info info;
 		dladdr( (const void *)&installCrashHandlers, &info );
-#if defined(__linux__)
+#if defined(__linux__) && !defined(__ANDROID__)
 		void *frames[ 4 ];
 		backtrace( frames, 4 );
 #endif
@@ -733,3 +861,18 @@ void installCrashHandlers( void )
 	}
 	std::set_terminate( handleTerminate );
 }
+
+#if defined(__ANDROID__)
+/*
+ * Install the crash handler before SDLActivity can call into JNI_OnLoad/main().
+ * This closes the exact window in which a constructor, dynamic-library load,
+ * or other pre-main startup fault previously killed the :game process silently.
+ */
+__attribute__((constructor(100))) static void installAndroidCrashHandlersEarly()
+{
+	char diagnostics[ 4096 ];
+	if (getenv( "ZH_ANDROID_DIAGNOSTICS_DIR" ) == NULL)
+		prepareEarlyAndroidDiagnosticsPath( diagnostics, sizeof( diagnostics ) );
+	installCrashHandlers();
+}
+#endif

@@ -203,6 +203,10 @@ public:
 	bool Upload_Back_Buffer(const std::vector<uint8_t> & bgra);
 
 	SDL_GPUDevice * Device() const { return GpuDevice; }
+#if defined(__ANDROID__)
+	/// Internal Android GLES state owned by this frame. The concrete type stays private to the backend .cpp.
+	void * Gles_State() const { return GlesState; }
+#endif
 	SDL_GPUTexture * Back_Buffer() const { return BackBuffer; }
 	/// What the last Present showed: the back buffer is copied here at each Present, so the front buffer
 	/// (GetFrontBufferData) is the presented picture whenever it is asked for (A3d).
@@ -213,6 +217,9 @@ public:
 	static unsigned int Target_Format();
 
 private:
+#if defined(__ANDROID__)
+	bool Gles_Replay();
+#endif
 	/// Submits, and with SerializeSubmits waits for the fence, adding the wait to FenceMs.
 	bool Submit(struct SDL_GPUCommandBuffer * commands);
 	bool SerializeSubmits;
@@ -322,6 +329,12 @@ private:
 	uint32_t StreamBufferSize;
 	struct SDL_GPUTransferBuffer * Transfer;
 	uint32_t TransferSize;
+
+#if defined(__ANDROID__)
+	// Non-NULL only for the Android GLES implementation. The pointer owns the SDL GL context and its
+	// temporary UBOs; all other platforms keep the original SDL GPU fields above unchanged.
+	void *GlesState;
+#endif
 
 	// The gamma pass, made the first time a ramp is not the identity.
 	SDL_GPUShader * GammaVertex;

@@ -51,6 +51,14 @@
 #include "Common/EarlyCommandLine.h"
 #include <stdio.h>
 #include <stdlib.h>
+#include <vector>
+#include <string.h>
+#if !defined(_WIN32)
+#include <dirent.h>
+#include <strings.h>
+#include <sys/stat.h>
+#include <algorithm>
+#endif
 
 #ifdef _INTERNAL
 // for occasional debugging...
@@ -72,6 +80,7 @@ static const char *const BASE_GAME_ARCHIVE = "Textures.big";
 // over.
 static const char *const BASE_GAME_DIRECTORIES[] = {
 	"ZH_Generals\\",
+	"z_generals\\",
 	"..\\Command & Conquer Generals\\",
 	"..\\Command & Conquer(tm) Generals\\",
 };
@@ -82,14 +91,101 @@ static const char FIRST_DECADE_GENERALS_FOLDER[] = "Command & Conquer(tm) Genera
 static Bool holdsBaseGameArchives(const char *directory)
 {
 	AsciiString archive = directory;
+	if (!archive.isEmpty() && !archive.endsWith("\\") && !archive.endsWith("/"))
+	{
+#if defined(_WIN32)
+		archive.concat("\\");
+#else
+		archive.concat("/");
+#endif
+	}
 	archive.concat(BASE_GAME_ARCHIVE);
 	return TheLocalFileSystem->doesFileExist(archive.str());
 }
 
-// The game starts without the base archives and then looks and sounds broken: magenta ground and
-// water, "Missing Audio File" for half the sound effects, no music and no tree models.  None of
-// that names its own cause, and a player staring at a pink main menu has nothing to go on, so it is
-// said here - before the menu, in the one place that knows.
+Bool Win32BIGFileSystem::loadBaseGameArchivesFromPath(const AsciiString &path)
+{
+	if (path.isEmpty() || !holdsBaseGameArchives(path.str()))
+		return FALSE;
+
+	DEBUG_LOG(("Win32BIGFileSystem::init - loading base Generals archives from '%s'\n", path.str()));
+	fprintf(stderr, "INFO: Mounting Base Generals archives from: %s\n", path.str());
+
+#if defined(__ANDROID__)
+	if (path.str()[0] == '/')
+	{
+		DIR *dir = opendir(path.str());
+		if (dir == NULL)
+		{
+			fprintf(stderr, "ERROR: Android cannot open Base Generals directory: %s (%s)\n",
+				path.str(), strerror(errno));
+			return FALSE;
+		}
+
+		Bool actuallyAdded = FALSE;
+		unsigned int candidates = 0;
+		unsigned int loaded = 0;
+		std::vector<std::string> archiveNames;
+
+		while (struct dirent *entry = readdir(dir))
+		{
+			const char *name = entry->d_name;
+			const size_t length = strlen(name);
+			if (length <= 4 || strcasecmp(name + length - 4, ".big") != 0)
+				continue;
+			archiveNames.push_back(name);
+		}
+
+		closedir(dir);
+		std::sort(archiveNames.begin(), archiveNames.end());
+		candidates = (unsigned int)archiveNames.size();
+
+		for (size_t index = 0; index < archiveNames.size(); ++index)
+		{
+			const std::string &name = archiveNames[index];
+			AsciiString archivePath = path;
+			if (!archivePath.isEmpty() && !archivePath.endsWith("/") && !archivePath.endsWith("\\"))
+				archivePath.concat("/");
+			archivePath.concat(name.c_str());
+
+			struct stat status;
+			if (stat(archivePath.str(), &status) != 0 || !S_ISREG(status.st_mode))
+				continue;
+
+			ArchiveFile *archiveFile = openArchiveFile(archivePath.str());
+			if (archiveFile == NULL)
+			{
+				fprintf(stderr, "WARNING: Android failed to open Base Generals archive: %s\n",
+					archivePath.str());
+				continue;
+			}
+
+			DEBUG_LOG(("Android Base Generals: loading %s into the directory tree.\n",
+				archivePath.str()));
+			fprintf(stderr, "INFO: Android mounted Base Generals archive: %s (%lld bytes)\n",
+				archivePath.str(), (long long)status.st_size);
+			loadIntoDirectoryTree(archiveFile, archivePath, FALSE);
+			m_archiveFileMap[archivePath] = archiveFile;
+			++loaded;
+			actuallyAdded = TRUE;
+		}
+		fprintf(stderr, "INFO: Android Base Generals physical mount scan: %u .big candidates, %u mounted\n",
+			candidates, loaded);
+		return actuallyAdded;
+	}
+#endif
+
+	const Bool loaded = loadBigFilesFromDirectory(path, "*.big", FALSE, FALSE);
+	if (!loaded)
+	{
+		DEBUG_LOG(("Win32BIGFileSystem::init - Textures.big exists in '%s', but no readable BIG archive was mounted\n",
+			path.str()));
+		fprintf(stderr, "WARNING: Textures.big exists but no Base Generals BIG archive was mounted from: %s\n",
+			path.str());
+	}
+	return loaded;
+}
+
 static void reportMissingBaseGame(void)
 {
 	DEBUG_LOG(("Win32BIGFileSystem::init - no base game archives anywhere; most of the art and audio will be missing.\n"));
@@ -108,14 +204,14 @@ static void reportMissingBaseGame(void)
 	::MessageBox(NULL,
 		"Zero Hour shares most of its artwork, sound effects and music with Command & Conquer Generals, "
 		"and none of the base game's .big files could be found.\n\n"
-		"Install Generals, or copy its .big files into a folder named ZH_Generals next to generals.exe.",
+		"Install Generals. Steam/EA installations using the nested ZH_Generals or z_generals layout are detected automatically; no file copying is required.",
 		"Zero Hour Reforged",
 		MB_OK | MB_ICONWARNING | MB_TASKMODAL);
 #else
 	MessageBoxWrapper(
 		"Zero Hour shares most of its artwork, sound effects and music with Command & Conquer Generals, "
 		"and none of the base game's .big files could be found.\n\n"
-		"Install Generals, or copy its .big files into a folder named ZH_Generals beside the game.",
+		"Install Generals. Steam/EA installations using the nested ZH_Generals or z_generals layout are detected automatically; no file copying is required.",
 		"Zero Hour Reforged",
 		MSGBOX_OK | MSGBOX_ICONWARNING | MSGBOX_TASKMODAL);
 #endif
@@ -172,26 +268,88 @@ void Win32BIGFileSystem::init() {
     if (!holdsBaseGameArchives(""))
     {
       AsciiString installPath;
-      GetStringFromGeneralsRegistry("", "InstallPath", installPath );
-      if (!installPath.isEmpty() && !installPath.endsWith("\\"))
+
+#if defined(__ANDROID__)
+      // Android follows the Steam/EA layout directly:
+      //   <Zero Hour>/INIZH.big
+      //   <Zero Hour>/TexturesZH.big
+      //   <Zero Hour>/ZH_Generals/Textures.big
+      //
+      // Do not require the original Generals archives to be in the
+      // Zero Hour root. The Java setup normally provides the exact base
+      // folder through CNC_GENERALS_PATH, but the standard nested
+      // ZH_Generals folder is also detected directly as a safety net.
+      const char *androidBaseEnv = getenv("CNC_GENERALS_PATH");
+      if (androidBaseEnv != NULL && androidBaseEnv[0] != '\0')
       {
-        installPath.concat("\\");
-      }
-      if (!installPath.isEmpty() && !holdsBaseGameArchives(installPath.str()))
-      {
-        AsciiString firstDecade = installPath;
-        firstDecade.concat(FIRST_DECADE_GENERALS_FOLDER);
-        if (holdsBaseGameArchives(firstDecade.str()))
+        if (holdsBaseGameArchives(androidBaseEnv))
         {
-          installPath = firstDecade;
+          installPath = androidBaseEnv;
+          fprintf(stderr, "INFO: Android base Generals path from setup: %s\n", installPath.str());
+        }
+        else
+        {
+          fprintf(stderr, "WARNING: Android base Generals path has no Textures.big: %s\n", androidBaseEnv);
         }
       }
-      // An uninstalled retail or First Decade copy leaves its key behind, and trusting it loaded
-      // no base archive at all: the water and the ground came up magenta and black on the shell map.
+
+      if (installPath.isEmpty() && holdsBaseGameArchives("ZH_Generals/"))
+      {
+        installPath = "ZH_Generals/";
+        fprintf(stderr, "INFO: Android detected standard Steam layout: %s\n", installPath.str());
+      }
+
+      if (installPath.isEmpty() && holdsBaseGameArchives("z_generals/"))
+      {
+        installPath = "z_generals/";
+        fprintf(stderr, "INFO: Android detected lowercase Steam base layout: %s\n", installPath.str());
+      }
+
+      if (installPath.isEmpty() && holdsBaseGameArchives("Generals/"))
+      {
+        installPath = "Generals/";
+        fprintf(stderr, "INFO: Android detected nested Generals layout: %s\n", installPath.str());
+      }
+
+      if (installPath.isEmpty())
+      {
+        static const char *const ANDROID_SIBLING_DIRECTORIES[] = {
+          "../Command & Conquer Generals/",
+          "../Command & Conquer(tm) Generals/"
+        };
+        for (Int i = 0; i < (Int)ARRAY_SIZE(ANDROID_SIBLING_DIRECTORIES) && installPath.isEmpty(); ++i)
+        {
+          if (holdsBaseGameArchives(ANDROID_SIBLING_DIRECTORIES[i]))
+          {
+            installPath = ANDROID_SIBLING_DIRECTORIES[i];
+            fprintf(stderr, "INFO: Android detected sibling Base Generals layout: %s\n", installPath.str());
+          }
+        }
+      }
+#endif
+
+      // Desktop installations still use the normal registry/fallback
+      // discovery when no explicit Android base path was selected.
+      if (installPath.isEmpty())
+      {
+        GetStringFromGeneralsRegistry("", "InstallPath", installPath );
+        if (!installPath.isEmpty() && !holdsBaseGameArchives(installPath.str()))
+        {
+          AsciiString firstDecade = installPath;
+          firstDecade.concat(FIRST_DECADE_GENERALS_FOLDER);
+          if (holdsBaseGameArchives(firstDecade.str()))
+          {
+            installPath = firstDecade;
+          }
+        }
+      }
+
       if (installPath.isEmpty() || !holdsBaseGameArchives(installPath.str()))
       {
-        DEBUG_LOG(("Win32BIGFileSystem::init - no base game archives in the registered folder '%s'\n", installPath.str()));
+        DEBUG_LOG(("Win32BIGFileSystem::init - no base game archives in selected candidate '%s'\n",
+          installPath.str()));
         installPath.clear();
+
         for (Int i = 0; i < (Int)ARRAY_SIZE(BASE_GAME_DIRECTORIES) && installPath.isEmpty(); i++)
         {
           if (holdsBaseGameArchives(BASE_GAME_DIRECTORIES[i]))
@@ -200,21 +358,13 @@ void Win32BIGFileSystem::init() {
           }
         }
       }
-      if (installPath.isEmpty())
+
+      if (installPath.isEmpty() || !loadBaseGameArchivesFromPath(installPath))
       {
         reportMissingBaseGame();
       }
-      else
-      {
-        // Loaded second on purpose: loadIntoDirectoryTree does not overwrite, so the
-        // Zero Hour bigs already in the tree win over the base game's copies.
-        DEBUG_LOG(("Win32BIGFileSystem::init - loading the base game's archives from '%s'\n", installPath.str()));
-        loadBigFilesFromDirectory(installPath, "*.big");
-      }
     }
 
-    // ... except where that costs resolution: a number of the base game's textures were shipped
-    // downscaled in TexturesZH.big, and load order alone made those the ones the game uses.
     prioritizeLargerFiles(TGA_DIR_PATH, "TexturesZH.big", "Textures.big");
 }
 
@@ -238,80 +388,127 @@ ArchiveFile * Win32BIGFileSystem::openArchiveFile(const Char *filename) {
 	DEBUG_LOG(("Win32BIGFileSystem::openArchiveFile - opening BIG file %s\n", filename));
 
 	if (fp == NULL) {
-		DEBUG_CRASH(("Could not open archive file %s for parsing", filename));
+		DEBUG_LOG(("Win32BIGFileSystem::openArchiveFile - cannot open %s\n", filename));
+		return NULL;
+	}
+
+	const Int physicalFileSize = fp->size();
+	if (physicalFileSize < 0x10) {
+		DEBUG_LOG(("Win32BIGFileSystem::openArchiveFile - %s is too small to be a BIG archive (%d bytes)\n",
+			filename, physicalFileSize));
+		fp->close();
 		return NULL;
 	}
 
 	AsciiString asciibuf;
 	char buffer[_MAX_PATH];
-	fp->read(buffer, 4); // read the "BIG" at the beginning of the file.
+	if (fp->read(buffer, 4) != 4) {
+		DEBUG_LOG(("Win32BIGFileSystem::openArchiveFile - short BIG identifier in %s\n", filename));
+		fp->close();
+		return NULL;
+	}
 	buffer[4] = 0;
 	if (strcmp(buffer, BIGFileIdentifier) != 0) {
 #if defined(_WIN32)
 		DEBUG_CRASH(("Error reading BIG file identifier in file %s", filename));
 #else
-		// Quietly, and once for each such file: macOS leaves a "._" AppleDouble companion beside every
-		// file it copies onto exFAT or FAT, and "*.big" finds them, so an install that came off such a
-		// volume has twenty of these.  They are not archives and nothing is lost by leaving them out
-		// (C1, PR (f)).
 		DEBUG_LOG(("Win32BIGFileSystem::openArchiveFile - %s is not a BIG archive (no BIGF), left out\n", filename));
 #endif
+		fp->close();
+		return NULL;
+	}
+
+	// Read the BIG header before allocating its archive index.  Android may see arbitrary .big files
+	// beside a Steam install, so malformed archives must be rejected instead of allowing an invalid
+	// file count or unterminated filename to walk past the fixed buffer.
+	if (fp->read(&archiveFileSize, 4) != 4 || fp->read(&numLittleFiles, 4) != 4) {
+		DEBUG_LOG(("Win32BIGFileSystem::openArchiveFile - incomplete BIG header in %s\n", filename));
+		fp->close();
+		return NULL;
+	}
+	numLittleFiles = ntohl(numLittleFiles);
+
+	DEBUG_LOG(("Win32BIGFileSystem::openArchiveFile - size field %d, physical size %d, %d files in %s\n",
+		archiveFileSize, physicalFileSize, numLittleFiles, filename));
+
+	if (numLittleFiles < 0) {
+		DEBUG_LOG(("Win32BIGFileSystem::openArchiveFile - negative file count in %s\n", filename));
+		fp->close();
+		return NULL;
+	}
+
+	// Every entry needs at least 8 bytes for offset/size and one byte for the terminating filename NUL.
+	const Int minimumEntryBytes = 9;
+	const Int maxPossibleEntries = (physicalFileSize - 0x10) / minimumEntryBytes;
+	if (numLittleFiles > maxPossibleEntries) {
+		DEBUG_LOG(("Win32BIGFileSystem::openArchiveFile - impossible file count %d in %s (max %d)\n",
+			numLittleFiles, filename, maxPossibleEntries));
+		fp->close();
+		return NULL;
+	}
+
+	ArchiveFile *archiveFile = NEW Win32BIGFile;
+
+	if (fp->seek(0x10, File::START) < 0) {
+		DEBUG_LOG(("Win32BIGFileSystem::openArchiveFile - cannot seek to BIG directory in %s\n", filename));
+		delete archiveFile;
 		fp->close();
 		fp = NULL;
 		return NULL;
 	}
 
-	// Allocated after the checks above, not before them: both of those returns used to walk away
-	// from a Win32BIGFile that had just been made. A directory of files that are not archives -
-	// which is what a mod folder handed to -mod can be - leaked one per file.
-	ArchiveFile *archiveFile = NEW Win32BIGFile;
-
-	// read in the file size.
-	fp->read(&archiveFileSize, 4);
-
-	DEBUG_LOG(("Win32BIGFileSystem::openArchiveFile - size of archive file is %d bytes\n", archiveFileSize));
-
-//	char t;
-
-	// read in the number of files contained in this BIG file.
-	// change the order of the bytes cause the file size is in reverse byte order for some reason.
-	fp->read(&numLittleFiles, 4);
-	numLittleFiles = ntohl(numLittleFiles);
-
-	DEBUG_LOG(("Win32BIGFileSystem::openArchiveFile - %d are contained in archive\n", numLittleFiles));
-//	for (Int i = 0; i < 2; ++i) {
-//		t = buffer[i];
-//		buffer[i] = buffer[(4-i)-1];
-//		buffer[(4-i)-1] = t;
-//	}
-
-	// seek to the beginning of the directory listing.
-	fp->seek(0x10, File::START);
-	// read in each directory listing.
 	ArchivedFileInfo *fileInfo = NEW ArchivedFileInfo;
 
 	for (Int i = 0; i < numLittleFiles; ++i) {
 		Int filesize = 0;
 		Int fileOffset = 0;
-		fp->read(&fileOffset, 4);
-		fp->read(&filesize, 4);
+		if (fp->read(&fileOffset, 4) != 4 || fp->read(&filesize, 4) != 4) {
+			DEBUG_LOG(("Win32BIGFileSystem::openArchiveFile - truncated directory entry %d in %s\n", i, filename));
+			delete fileInfo;
+			delete archiveFile;
+			fp = NULL;
+			return NULL;
+		}
 
 		filesize = ntohl(filesize);
 		fileOffset = ntohl(fileOffset);
 
+		if (fileOffset < 0 || filesize < 0 || fileOffset > physicalFileSize ||
+			filesize > physicalFileSize - fileOffset) {
+			DEBUG_LOG(("Win32BIGFileSystem::openArchiveFile - invalid data range in entry %d of %s (offset %d size %d physical %d)\n",
+				i, filename, fileOffset, filesize, physicalFileSize));
+			delete fileInfo;
+			delete archiveFile;
+			fp = NULL;
+			return NULL;
+		}
+
 		fileInfo->m_archiveFilename = archiveFileName;
 		fileInfo->m_offset = fileOffset;
 		fileInfo->m_size = filesize;
-		
-		// read in the path name of the file.
-		Int pathIndex = -1;
-		do {
+
+		Int pathIndex = 0;
+		Bool terminated = FALSE;
+		while (pathIndex < _MAX_PATH - 1) {
+			if (fp->read(buffer + pathIndex, 1) != 1) {
+				break;
+			}
+			if (buffer[pathIndex] == 0) {
+				terminated = TRUE;
+				break;
+			}
 			++pathIndex;
-			fp->read(buffer + pathIndex, 1);
-		} while (buffer[pathIndex] != 0);
+		}
+		if (!terminated) {
+			DEBUG_LOG(("Win32BIGFileSystem::openArchiveFile - invalid/unterminated filename in entry %d of %s\n",
+				i, filename));
+			delete fileInfo;
+			delete archiveFile;
+			fp = NULL;
+			return NULL;
+		}
 
 		Int filenameIndex = pathIndex;
-		// the index test first: a name with no separator used to read buffer[-1] before the test stopped it
 		while ((filenameIndex >= 0) && (buffer[filenameIndex] != '\\') && (buffer[filenameIndex] != '/')) {
 			--filenameIndex;
 		}
@@ -326,8 +523,6 @@ ArchiveFile * Win32BIGFileSystem::openArchiveFile(const Char *filename) {
 		AsciiString debugpath;
 		debugpath = path;
 		debugpath.concat(fileInfo->m_filename);
-//		DEBUG_LOG(("Win32BIGFileSystem::openArchiveFile - adding file %s to archive file %s, file number %d\n", debugpath.str(), fileInfo->m_archiveFilename.str(), i));
-
 		archiveFile->addFile(path, fileInfo);
 	}
 
@@ -336,11 +531,8 @@ ArchiveFile * Win32BIGFileSystem::openArchiveFile(const Char *filename) {
 	delete fileInfo;
 	fileInfo = NULL;
 
-	// leave fp open as the archive file will be using it.
-
 	return archiveFile;
 }
-
 void Win32BIGFileSystem::closeArchiveFile(const Char *filename) {
 	// Need to close the specified big file
 	ArchiveFileMap::iterator it =  m_archiveFileMap.find(filename);

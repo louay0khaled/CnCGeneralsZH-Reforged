@@ -170,5 +170,9 @@ private:
 
 extern SubsystemInterfaceList* TheSubsystemList;
 
+// Best-effort detail for the current subsystem initialization operation. Updated immediately before
+// init() and each INI load so a release Android startup failure identifies the exact operation.
+extern AsciiString TheSubsystemInitDetail;
+
 #endif // __SUBSYSTEMINTERFACE_H_
 

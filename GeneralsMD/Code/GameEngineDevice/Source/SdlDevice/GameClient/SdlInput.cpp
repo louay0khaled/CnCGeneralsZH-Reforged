@@ -25,6 +25,7 @@
 #include "SdlDevice/GameClient/SdlInput.h"
 #include "SdlDevice/GameClient/SdlKeyTable.h"
 #include "SdlDevice/GameClient/SdlKeyboard.h"
+#include "SdlDevice/GameClient/TouchInput.h"
 #include "SdlDevice/GameClient/SdlMouse.h"
 
 #include <SDL3/SDL.h>
@@ -77,7 +78,10 @@ void SdlInput_install( void )
 	if (installed)
 		return;
 	installed = TRUE;
-	SDL_SetHint( SDL_HINT_MAC_CTRL_CLICK_EMULATE_RIGHT_CLICK, "0" );	// force fire is Control + LEFT click
+	SDL_SetHint( SDL_HINT_MAC_CTRL_CLICK_EMULATE_RIGHT_CLICK, "0" );
+#if defined(__ANDROID__)
+	SDL_SetHint( SDL_HINT_TOUCH_MOUSE_EVENTS, "0" );
+#endif	// force fire is Control + LEFT click
 	SDL_SetHint( SDL_HINT_IME_IMPLEMENTED_UI, "composition" );				// W3DTextEntry draws it; the platform draws candidates
 	PosixIMEManager::DeviceHooks hooks = { startTextInput, stopTextInput };
 	PosixIMEManager::setDeviceHooks( hooks );
@@ -133,6 +137,10 @@ void SdlInput_resetWheel( void )
 Bool SdlInput_dispatch( const SDL_Event &event )
 {
 	SdlInput_install();
+#if defined(__ANDROID__)
+	if (TouchInput::dispatch(event))
+		return TRUE;
+#endif
 	switch (event.type)
 	{
 		case SDL_EVENT_KEY_DOWN:

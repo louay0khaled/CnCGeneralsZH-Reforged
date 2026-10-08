@@ -28,6 +28,7 @@
 #include "PreRTS.h"	// This must go first in EVERY cpp file int the GameEngine
 
 #include "Common/SubsystemInterface.h"
+#include "Common/FileSystem.h"
 #include "Common/Xfer.h"
 
 #ifdef _INTERNAL
@@ -125,6 +126,9 @@ void SubsystemInterface::DRAW(void)
 
 
 //-----------------------------------------------------------------------------
+AsciiString TheSubsystemInitDetail;
+
+//-----------------------------------------------------------------------------
 SubsystemInterfaceList::SubsystemInterfaceList()
 {
 }
@@ -162,16 +166,43 @@ void SubsystemInterfaceList::removeSubsystem(SubsystemInterface* sys)
 void SubsystemInterfaceList::initSubsystem(SubsystemInterface* sys, const char* path1, const char* path2, const char* dirpath, Xfer *pXfer, AsciiString name)
 {
 	sys->setName(name);
+	TheSubsystemInitDetail.format("%s: init()", name.str());
 	sys->init();
 
 	INI ini;
 	if (path1)
+	{
+		TheSubsystemInitDetail.format("%s: %s", name.str(), path1);
+		DEBUG_LOG(("Subsystem init: %s\n", TheSubsystemInitDetail.str()));
 		ini.load(path1, INI_LOAD_OVERWRITE, pXfer );
+	}
 	if (path2)
-		ini.load(path2, INI_LOAD_OVERWRITE, pXfer );
+	{
+		// A second path is the player's optional loose override when a default archive/INI is
+		// already supplied by path1. Several retail code paths use this form, but a clean Steam
+		// install does not contain every override file. Treat path2 as optional when path1 exists;
+		// keep it mandatory when path1 is NULL (for subsystems whose only source is path2).
+		const Bool optionalOverride = path1 != NULL;
+		if (!optionalOverride || TheFileSystem->doesFileExist(path2))
+		{
+			TheSubsystemInitDetail.format("%s: %s", name.str(), path2);
+			DEBUG_LOG(("Subsystem init: %s\n", TheSubsystemInitDetail.str()));
+			ini.load(path2, INI_LOAD_OVERWRITE, pXfer );
+		}
+		else
+		{
+			TheSubsystemInitDetail.format("%s: optional override missing: %s", name.str(), path2);
+			DEBUG_LOG(("Subsystem init: %s\n", TheSubsystemInitDetail.str()));
+		}
+	}
 	if (dirpath)
+	{
+		TheSubsystemInitDetail.format("%s: directory %s", name.str(), dirpath);
+		DEBUG_LOG(("Subsystem init: %s\n", TheSubsystemInitDetail.str()));
 		ini.loadDirectory(dirpath, TRUE, INI_LOAD_OVERWRITE, pXfer );
+	}
 
+	TheSubsystemInitDetail.format("%s: complete", name.str());
 	m_subsystems.push_back(sys);
 }
 

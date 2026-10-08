@@ -40,7 +40,7 @@ const char ZERO_HOUR_ARCHIVE[] = "INIZH.big";
 const char BASE_GAME_ARCHIVE[] = "Textures.big";
 
 // Win32BIGFileSystem::init's places for the base game, relative to the Zero Hour folder.
-const char *const BASE_GAME_FOLDERS[] = { "", "ZH_Generals", "../Command & Conquer Generals",
+const char *const BASE_GAME_FOLDERS[] = { "", "ZH_Generals", "z_generals", "../Command & Conquer Generals",
 	"../Command & Conquer(tm) Generals" };
 const char FIRST_DECADE_GENERALS_FOLDER[] = "Command & Conquer(tm) Generals";
 
@@ -212,10 +212,10 @@ std::string PosixInstallCheckMessage( PosixInstallCheck check, const std::string
 				"Choose the folder Zero Hour is installed in, the one with INIZH.big in it.";
 		case INSTALL_NO_BASE_GAME:
 			return "\"" + folder + "\" holds Zero Hour, but not the original Command & Conquer Generals it needs: "
-				"its Textures.big is not there, in a ZH_Generals folder inside it, or in a \"Command & Conquer "
+				"its Textures.big is not there, in a ZH_Generals/z_generals folder inside it, or in a \"Command & Conquer "
 				"Generals\" folder beside it.\n\n"
-				"Copy Generals' .big files into a folder named ZH_Generals inside the Zero Hour folder, then choose "
-				"the Zero Hour folder again.";
+				"Steam/EA installs may keep the original Generals inside a ZH_Generals or z_generals subfolder; "
+				"the checker searches those layouts automatically, so no files need to be moved.";
 		case INSTALL_INSIDE_THE_APP:
 			return "\"" + folder + "\" is inside the game's own app. Choose the folder your copy of Zero Hour is "
 				"installed in.";

@@ -35,6 +35,7 @@
 
 #ifndef _WIN32
 #include <sys/stat.h>
+#include <stdlib.h>
 #if defined(__APPLE__)
 #include <limits.h>
 #include <mach-o/dyld.h>
@@ -118,6 +119,37 @@ Bool isExecutablePackaged( void )
 
 void getLogDirectory( char *buf, size_t size, Bool keepTrailingSeparator )
 {
+#if defined(__ANDROID__)
+	/*
+	 * Android's native .so directory is immutable. Use the explicit external app-specific
+	 * diagnostics directory selected during the early Android bootstrap. It is a real POSIX path.
+	 */
+	const char *override = getenv( "ZH_ANDROID_DIAGNOSTICS_DIR" );
+	char androidLogs[ 4096 ];
+	buf[0] = 0;
+	if (override != NULL && override[0] != '\0')
+	{
+		if (strlcpy( androidLogs, override, sizeof( androidLogs) ) >= sizeof( androidLogs ))
+			return;
+	}
+	else
+	{
+		char userData[ 4096 ];
+		if (!findUserDataDirectory( userData, sizeof( userData) ))
+			return;
+		size_t length = strlen( userData );
+		while (length > 0 && (userData[ length - 1 ] == '\\' || userData[ length - 1 ] == '/'))
+			userData[ --length ] = 0;
+		if (snprintf( androidLogs, sizeof( androidLogs ), "%s/Logs", userData ) <= 0)
+			return;
+	}
+	mkdir( androidLogs, 0777 );
+	if (strlcpy( buf, androidLogs, size ) >= size ||
+			(keepTrailingSeparator && strlcat( buf, "/", size) >= size))
+		buf[0] = 0;
+	return;
+#endif
+
 	getExecutableDirectory( buf, size, keepTrailingSeparator );
 	if (!isExecutablePackaged())
 		return;

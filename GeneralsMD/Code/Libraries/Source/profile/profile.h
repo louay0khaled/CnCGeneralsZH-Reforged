@@ -23,7 +23,7 @@
 // $Revision: #4 $
 // $DateTime: 2003/08/14 13:43:29 $
 //
-// ©2003 Electronic Arts
+// Â©2003 Electronic Arts
 //
 // Profiling module
 //////////////////////////////////////////////////////////////////////////////
@@ -37,15 +37,18 @@
 	#error "Only either _DEBUG or _INTERNAL should ever be defined"
 #endif
 
-// Define which libraries to use. 
-#if defined(_INTERNAL)
-#  pragma comment (lib,"profileinternal.lib")
-#elif defined(_DEBUG)
-#  pragma comment (lib,"profiledebug.lib")
-#elif defined(_PROFILE)
-#  pragma comment (lib,"profileprofile.lib")
-#else
-#  pragma comment (lib,"profile.lib")
+// Define which libraries to use.  MSVC resolves these automatically; other
+// toolchains link the corresponding targets through CMake.
+#if defined(_MSC_VER)
+#  if defined(_INTERNAL)
+#    pragma comment (lib,"profileinternal.lib")
+#  elif defined(_DEBUG)
+#    pragma comment (lib,"profiledebug.lib")
+#  elif defined(_PROFILE)
+#    pragma comment (lib,"profileprofile.lib")
+#  else
+#    pragma comment (lib,"profile.lib")
+#  endif
 #endif
 
 // include all our public header files (use double quotes here)

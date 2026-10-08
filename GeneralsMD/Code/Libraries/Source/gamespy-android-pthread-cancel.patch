@@ -1,0 +1,24 @@
+diff --git a/src/common/linux/gsthreadlinux.c b/src/common/linux/gsthreadlinux.c
+--- a/src/common/linux/gsthreadlinux.c
++++ b/src/common/linux/gsthreadlinux.c
+@@ -67,13 +67,20 @@
+ void gsiCancelThread(GSIThreadID id)
+ {
+     //should i destroy the attributes here?
+     pthread_attr_destroy(&id.attr);
+ 
++#if defined(__ANDROID__)
++    // Android's bionic pthread implementation does not expose pthread_cancel.
++    // The pthread resource is released by detaching it; the thread is allowed to
++    // finish naturally because this SDK has no cooperative cancellation hook.
++    pthread_detach(id.thread);
++#else
+     if (pthread_cancel(id.thread) != PTHREAD_NO_ERROR) {
+         //there was an error - how should we handle these? or should we?
+         gsDebugFormat(GSIDebugCat_Common, GSIDebugType_Misc, GSIDebugLevel_WarmError, "Failed to cancel thread\r\n");
+     }
++#endif
+     //free up memory and set to NULL
+ 
+     gsifree(&id.thread);
+ }

@@ -89,6 +89,7 @@ void build()
 
 	file( at( "whole/INIZH.big" ) );							// Zero Hour with its base game inside
 	file( at( "whole/ZH_Generals/Textures.big" ) );
+	file( at( "steamnested/z_generals/Textures.big" ) );
 	file( at( "nobase/INIZH.big" ) );							// Zero Hour alone
 	file( at( "siblings/Zero Hour/INIZH.big" ) );				// the base game beside it
 	file( at( "siblings/Command & Conquer Generals/Textures.big" ) );
@@ -167,6 +168,7 @@ TEST(install_folder_validation_and_its_messages)
 	build();
 	const std::vector<std::string> forbidden( 1, at( "Fake.app" ) );
 	CHECK_EQ( PosixCheckInstallFolder( at( "whole" ), forbidden ), INSTALL_OK );
+	CHECK_EQ( PosixCheckInstallFolder( at( "steamnested" ), forbidden ), INSTALL_OK );	// Steam layout alias
 	CHECK_EQ( PosixCheckInstallFolder( at( "siblings/Zero Hour" ), forbidden ), INSTALL_OK );	// "../Command & Conquer Generals"
 	CHECK_EQ( PosixCheckInstallFolder( at( "nobase" ), forbidden ), INSTALL_NO_BASE_GAME );
 	CHECK_EQ( PosixCheckInstallFolder( at( "notzh" ), forbidden ), INSTALL_NO_ZERO_HOUR );

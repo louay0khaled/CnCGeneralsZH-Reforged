@@ -1,0 +1,85 @@
+plugins {
+    id "com.android.application"
+}
+
+android {
+    namespace "org.reforged.zero.hour"
+    compileSdk 35
+    ndkVersion "28.2.13676358"
+
+    defaultConfig {
+        // Keep the same application id used by the first installable APK so upgrades stay in-place.
+        applicationId "com.louay.generalszh"
+        minSdk 21
+        targetSdk 35
+        versionCode 2
+        versionName "0.2.0-native-gles"
+
+        if (!project.hasProperty("PREBUILT_NATIVE")) {
+            externalNativeBuild {
+                cmake {
+                    arguments "-DANDROID_PLATFORM=android-21", "-DANDROID_STL=c++_shared"
+                }
+            }
+        }
+
+        ndk {
+            abiFilters "arm64-v8a"
+        }
+    }
+
+    sourceSets {
+        main {
+            manifest.srcFile "src/main/AndroidManifest.xml"
+            java.srcDirs = [
+                "src/main/java",
+                "../../Code/Libraries/Source/SDL3/android-project/app/src/main/java"
+            ]
+            res.srcDirs = ["src/main/res"]
+            // Reforged-owned data is part of the Android application, not the user's Steam install.
+            // Generate an asset tree rooted at Data/ so SetupActivity can extract it verbatim to
+            // <app-internal>/ReforgedData/Data and the native POSIX overlay resolves Data\\... exactly
+            // like the desktop install. Do not rely on a sourceSets relative path alone: AGP can
+            // otherwise silently omit this out-of-tree directory from the final APK.
+            jniLibs.srcDirs = ["libs"]
+        }
+    }
+
+    def reforgedDataDir = file("../../Code/Data")
+    def generatedReforgedAssetsDir = file("${buildDir}/generated/reforged-assets")
+
+    tasks.register("prepareReforgedAssets", Sync) {
+        from(reforgedDataDir)
+        into(new File(generatedReforgedAssetsDir, "Data"))
+    }
+
+    android.sourceSets.main.assets.srcDir(generatedReforgedAssetsDir)
+
+    tasks.named("preBuild") {
+        dependsOn(tasks.named("prepareReforgedAssets"))
+    }
+
+    if (!project.hasProperty("PREBUILT_NATIVE")) {
+        externalNativeBuild {
+            cmake {
+                path "jni/CMakeLists.txt"
+            }
+        }
+    }
+
+    buildTypes {
+        release {
+            minifyEnabled false
+            debuggable false
+        }
+        debug {
+            debuggable true
+        }
+    }
+
+    packaging {
+        jniLibs {
+            useLegacyPackaging = false
+        }
+    }
+}
