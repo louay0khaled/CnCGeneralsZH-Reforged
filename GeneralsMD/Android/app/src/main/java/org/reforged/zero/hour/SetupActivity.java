@@ -1037,6 +1037,42 @@ public final class SetupActivity extends Activity {
         return showNativeDiagnosticsIfPresent(false);
     }
 
+    private void launchGame() {
+        String root = savedRoot();
+        if (root == null || root.isEmpty()) {
+            Toast.makeText(this, "لم يتم اختيار مجلد Zero Hour.", Toast.LENGTH_LONG).show();
+            return;
+        }
+
+        Status status = inspect(new File(root));
+        if (!status.complete()) {
+            Toast.makeText(this, "ملفات Zero Hour غير مكتملة. اختر مجلدًا صالحًا أولًا.", Toast.LENGTH_LONG).show();
+            return;
+        }
+
+        File pending = gameRunPendingFile();
+        try {
+            File parent = pending.getParentFile();
+            if (parent != null && !parent.isDirectory() && !parent.mkdirs() && !parent.isDirectory()) {
+                throw new IOException("could not create diagnostics directory");
+            }
+            try (FileOutputStream out = new FileOutputStream(pending, false)) {
+                out.write(Long.toString(System.currentTimeMillis()).getBytes(StandardCharsets.UTF_8));
+                out.flush();
+                out.getFD().sync();
+            }
+
+            Intent intent = new Intent(this, GeneralsActivity.class);
+            startActivity(intent);
+        } catch (ActivityNotFoundException e) {
+            pending.delete();
+            Toast.makeText(this, "تعذر فتح واجهة اللعبة: " + e.getMessage(), Toast.LENGTH_LONG).show();
+        } catch (IOException | SecurityException e) {
+            pending.delete();
+            Toast.makeText(this, "تعذر تجهيز تشغيل اللعبة: " + e.getMessage(), Toast.LENGTH_LONG).show();
+        }
+    }
+
     private void showError(String message) {
         new AlertDialog.Builder(this).setTitle("إعداد اللعبة")
                 .setMessage(message)
