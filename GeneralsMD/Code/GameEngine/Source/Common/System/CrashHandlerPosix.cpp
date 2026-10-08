@@ -715,10 +715,89 @@ void setCrashLogDescriptor( int fd )
 	s_logFd.store( fd );
 }
 
+#if defined(__ANDROID__)
+/*
+ * The crash handler must be usable while libmain.so is being loaded. At that point
+ * SDL's Android JNI state is not guaranteed to exist yet, so this path discovery
+ * deliberately uses only the Linux/Android process interface and normal POSIX I/O.
+ *
+ * Android app-specific external files are:
+ *   /storage/emulated/<user>/Android/data/<package>/files
+ * The per-user portion is derived from the Linux UID and the package from
+ * /proc/self/cmdline. This matches Context.getExternalFilesDir(null) for the
+ * application id used by this project, while also working from the isolated :game process.
+ */
+bool prepareEarlyAndroidDiagnosticsPath( char *diagnostics, size_t diagnosticsSize )
+{
+	if (diagnostics == NULL || diagnosticsSize == 0)
+		return false;
+
+	char package[ 256 ];
+	memset( package, 0, sizeof( package ) );
+	int fd = open( "/proc/self/cmdline", O_RDONLY | O_CLOEXEC );
+	ssize_t readCount = fd >= 0 ? read( fd, package, sizeof( package ) - 1 ) : -1;
+	if (fd >= 0)
+		close( fd );
+
+	if (readCount <= 0 || package[0] == '\0')
+	{
+		strncpy( package, "com.louay.generalszh", sizeof( package ) - 1 );
+	}
+	else
+	{
+		package[ sizeof( package ) - 1 ] = '\0';
+		for (size_t i = 0; i < sizeof( package ) - 1 && package[i] != '\0'; ++i)
+		{
+			if (package[i] == ':')
+			{
+				package[i] = '\0';
+				break;
+			}
+		}
+		if (package[0] == '\0' || strchr( package, '/' ) != NULL)
+			strncpy( package, "com.louay.generalszh", sizeof( package ) - 1 );
+	}
+
+	const unsigned long androidUser = (unsigned long)getuid() / 100000UL;
+	char appExternal[ 4096 ];
+	char userData[ 4096 ];
+	int n = snprintf( appExternal, sizeof( appExternal ),
+		"/storage/emulated/%lu/Android/data/%s/files", androidUser, package );
+	if (n <= 0 || n >= (int)sizeof( appExternal ))
+		return false;
+
+	n = snprintf( userData, sizeof( userData ), "%s/ZeroHourData", appExternal );
+	if (n <= 0 || n >= (int)sizeof( userData ))
+		return false;
+	n = snprintf( diagnostics, diagnosticsSize, "%s/Logs", userData );
+	if (n <= 0 || n >= (int)diagnosticsSize)
+		return false;
+
+	if (mkdir( appExternal, 0777 ) != 0 && errno != EEXIST)
+		return false;
+	if (mkdir( userData, 0777 ) != 0 && errno != EEXIST)
+		return false;
+	if (mkdir( diagnostics, 0777 ) != 0 && errno != EEXIST)
+		return false;
+
+	if (setenv( "ZH_USER_DATA_DIR", userData, 1 ) != 0 ||
+			setenv( "ZH_ANDROID_DIAGNOSTICS_DIR", diagnostics, 1 ) != 0)
+		return false;
+	return true;
+}
+#endif
+
 void installCrashHandlers( void )
 {
 	if (s_installed)
+	{
+		// The early constructor can run on SDL/Android's loader thread, while SDL
+		// may invoke the real game main on its dedicated game thread. Rebind the
+		// per-thread crash state when main() calls us again.
+		s_mainThread = pthread_self();
+		installThreadCrashStack();
 		return;
+	}
 	s_installed = true;
 	s_mainThread = pthread_self();
 
@@ -734,7 +813,7 @@ void installCrashHandlers( void )
 		if (snprintf( folder, sizeof( folder ), "%s", androidLogs ) > 0)
 			mkdir( folder, 0777 );
 	}
-	else if (findUserDataDirectory( folder, sizeof( folder ) ))
+	else if (prepareEarlyAndroidDiagnosticsPath( folder, sizeof( folder ) ))
 #else
 	if (findUserDataDirectory( folder, sizeof( folder ) ))
 #endif
@@ -782,3 +861,18 @@ void installCrashHandlers( void )
 	}
 	std::set_terminate( handleTerminate );
 }
+
+#if defined(__ANDROID__)
+/*
+ * Install the crash handler before SDLActivity can call into JNI_OnLoad/main().
+ * This closes the exact window in which a constructor, dynamic-library load,
+ * or other pre-main startup fault previously killed the :game process silently.
+ */
+__attribute__((constructor(100))) static void installAndroidCrashHandlersEarly()
+{
+	char diagnostics[ 4096 ];
+	if (getenv( "ZH_ANDROID_DIAGNOSTICS_DIR" ) == NULL)
+		prepareEarlyAndroidDiagnosticsPath( diagnostics, sizeof( diagnostics ) );
+	installCrashHandlers();
+}
+#endif
