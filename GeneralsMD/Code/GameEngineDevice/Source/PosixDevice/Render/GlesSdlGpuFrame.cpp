@@ -655,13 +655,10 @@ SdlGpuFrame *SdlGpuFrame::Create(RenderWindow window, unsigned int width, unsign
         return NULL;
     }
 
-    SDL_GL_SetAttribute(SDL_GL_CONTEXT_PROFILE_MASK, SDL_GL_CONTEXT_PROFILE_ES);
-    SDL_GL_SetAttribute(SDL_GL_CONTEXT_MAJOR_VERSION, 3);
-    SDL_GL_SetAttribute(SDL_GL_CONTEXT_MINOR_VERSION, 0);
-    SDL_GL_SetAttribute(SDL_GL_DOUBLEBUFFER, 1);
-    SDL_GL_SetAttribute(SDL_GL_DEPTH_SIZE, 24);
-    SDL_GL_SetAttribute(SDL_GL_STENCIL_SIZE, 8);
-
+    // SDL3 applies GL attributes when the OpenGL window is created. Android sets
+    // these before SDL_CreateWindow() in SdlGameEngine::createWindow().
+    // Keep context creation here side-effect free: SDL_GL_CreateContext() itself
+    // makes the newly-created context current.
     SDL_GLContext context = SDL_GL_CreateContext((SDL_Window *)window);
     if (context == NULL) {
 #if defined(__ANDROID__)
@@ -674,21 +671,6 @@ SdlGpuFrame *SdlGpuFrame::Create(RenderWindow window, unsigned int width, unsign
         error = std::string("OpenGL ES context: ") + SDL_GetError();
         return NULL;
     }
-    // SDL3 returns true on success and false on failure. The previous code used
-    // the SDL2-style numeric convention and rejected every successful context.
-    if (!SDL_GL_MakeCurrent((SDL_Window *)window, context)) {
-#if defined(__ANDROID__)
-        {
-            char diagnostic[512];
-            snprintf(diagnostic, sizeof(diagnostic), "SDL_GL_MakeCurrent failed: %s", SDL_GetError());
-            appendAndroidDiagnostic(diagnostic);
-        }
-#endif
-        error = std::string("OpenGL ES make-current: ") + SDL_GetError();
-        SDL_GL_DestroyContext(context);
-        return NULL;
-    }
-
     const char *version = (const char *)glGetString(GL_VERSION);
     const char *vendor = (const char *)glGetString(GL_VENDOR);
 #if defined(__ANDROID__)
