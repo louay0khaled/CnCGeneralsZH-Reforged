@@ -608,6 +608,14 @@ SDL_GPUGraphicsPipeline *SdlPipelineCache::Pipeline(const SdlPipelineKey &key)
     if (opaque == NULL) {
         fprintf(stderr, "GlesPipelineCache: pipeline refused: %s; FVF 0x%x primitive %u depth %u/%u\n",
             refusal.c_str(), (unsigned)key.FVF, (unsigned)key.Primitive, (unsigned)key.DepthTest, (unsigned)key.DepthWrite);
+        if (Sdl_Creation_Log_Asked()) {
+            char line[1024];
+            snprintf(line, sizeof(line),
+                "ANDROID GLES PIPELINE REFUSED: reason=%s FVF=0x%x primitive=%u depthTest=%u depthWrite=%u",
+                refusal.c_str(), (unsigned)key.FVF, (unsigned)key.Primitive,
+                (unsigned)key.DepthTest, (unsigned)key.DepthWrite);
+            Sdl_Creation_Log_Line(line);
+        }
     }
     Pipelines[key] = opaque;
     LastKey = key;
