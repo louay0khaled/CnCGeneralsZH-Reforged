@@ -234,12 +234,6 @@ static void configureAndroidUserDataDirectory()
 	fprintf( stderr, "INFO: Android diagnostics directory: %s\\n", diagnostics );
 }
 
-__attribute__((constructor(101))) static void androidEarlyBootstrap()
-{
-	configureAndroidUserDataDirectory();
-	installCrashHandlers();
-	appendAndroidDiagnostic( "Android early bootstrap completed" );
-}
 #endif
 
 /** Whether this runs in the Steam Deck's Game Mode (P3): gamescope's session names itself in
@@ -610,7 +604,8 @@ static Bool takeOneCopyLock( void )
 int main( int argc, char *argv[] )
 {
 #if defined(__ANDROID__)
-	// androidEarlyBootstrap already ran before ordinary constructors; this call is idempotent.
+	// SDL is initialized by the time SDLActivity enters the native main path, so
+	// storage discovery belongs here rather than in an ELF constructor.
 	configureAndroidUserDataDirectory();
 	appendAndroidDiagnostic( "main() entered" );
 #endif
