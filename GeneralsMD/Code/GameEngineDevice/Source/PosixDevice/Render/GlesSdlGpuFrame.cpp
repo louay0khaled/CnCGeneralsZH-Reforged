@@ -30,10 +30,101 @@ struct GlesFrameState
     SDL_GLContext Context;
     GLuint TargetFbo;
     GLuint UniformBuffers[2];
+    GLuint PresentProgram;
+    GLuint PresentVao;
+    GLint PresentSampler;
     unsigned int DrawableWidth;
     unsigned int DrawableHeight;
     unsigned int FrameId;
 };
+
+static const char *PRESENT_VERTEX_SHADER =
+    "#version 300 es\n"
+    "precision highp float;\n"
+    "out vec2 vTexCoord;\n"
+    "void main() {\n"
+    "  vec2 p;\n"
+    "  if (gl_VertexID == 0) p = vec2(-1.0, -1.0);\n"
+    "  else if (gl_VertexID == 1) p = vec2(3.0, -1.0);\n"
+    "  else p = vec2(-1.0, 3.0);\n"
+    "  gl_Position = vec4(p, 0.0, 1.0);\n"
+    "  vTexCoord = p * 0.5 + 0.5;\n"
+    "}\n";
+
+static const char *PRESENT_FRAGMENT_SHADER =
+    "#version 300 es\n"
+    "precision mediump float;\n"
+    "uniform sampler2D uBackBuffer;\n"
+    "in vec2 vTexCoord;\n"
+    "out vec4 outColor;\n"
+    "void main() { outColor = texture(uBackBuffer, vTexCoord); }\n";
+
+static GLuint CompilePresentShader(GLenum type, const char *source)
+{
+    GLuint shader = glCreateShader(type);
+    if (shader == 0)
+        return 0;
+
+    glShaderSource(shader, 1, &source, NULL);
+    glCompileShader(shader);
+
+    GLint compiled = GL_FALSE;
+    glGetShaderiv(shader, GL_COMPILE_STATUS, &compiled);
+    if (compiled == GL_TRUE)
+        return shader;
+
+    char message[1024] = {};
+    GLsizei length = 0;
+    glGetShaderInfoLog(shader, (GLsizei)sizeof(message) - 1, &length, message);
+    fprintf(stderr, "GLES presenter shader compilation failed (0x%x): %s\n",
+        (unsigned)type, message);
+    glDeleteShader(shader);
+    return 0;
+}
+
+static GLuint CreatePresentProgram(GLint &samplerLocation)
+{
+    samplerLocation = -1;
+    const GLuint vertex = CompilePresentShader(GL_VERTEX_SHADER, PRESENT_VERTEX_SHADER);
+    const GLuint fragment = CompilePresentShader(GL_FRAGMENT_SHADER, PRESENT_FRAGMENT_SHADER);
+    if (vertex == 0 || fragment == 0) {
+        if (vertex != 0) glDeleteShader(vertex);
+        if (fragment != 0) glDeleteShader(fragment);
+        return 0;
+    }
+
+    const GLuint program = glCreateProgram();
+    if (program == 0) {
+        glDeleteShader(vertex);
+        glDeleteShader(fragment);
+        return 0;
+    }
+
+    glAttachShader(program, vertex);
+    glAttachShader(program, fragment);
+    glLinkProgram(program);
+    glDeleteShader(vertex);
+    glDeleteShader(fragment);
+
+    GLint linked = GL_FALSE;
+    glGetProgramiv(program, GL_LINK_STATUS, &linked);
+    if (linked != GL_TRUE) {
+        char message[1024] = {};
+        GLsizei length = 0;
+        glGetProgramInfoLog(program, (GLsizei)sizeof(message) - 1, &length, message);
+        fprintf(stderr, "GLES presenter program link failed: %s\n", message);
+        glDeleteProgram(program);
+        return 0;
+    }
+
+    samplerLocation = glGetUniformLocation(program, "uBackBuffer");
+    if (samplerLocation < 0) {
+        fprintf(stderr, "GLES presenter sampler uniform was not linked\n");
+        glDeleteProgram(program);
+        return 0;
+    }
+    return program;
+}
 
 static unsigned int NextGlesFrameId = 0;
 
@@ -791,6 +882,9 @@ SdlGpuFrame *SdlGpuFrame::Create(RenderWindow window, unsigned int width, unsign
     state->Context = context;
     state->TargetFbo = 0;
     state->UniformBuffers[0] = state->UniformBuffers[1] = 0;
+    state->PresentProgram = 0;
+    state->PresentVao = 0;
+    state->PresentSampler = -1;
     state->DrawableWidth = width;
     state->DrawableHeight = height;
     state->FrameId = ++NextGlesFrameId;
@@ -827,6 +921,17 @@ SdlGpuFrame *SdlGpuFrame::Create(RenderWindow window, unsigned int width, unsign
         appendAndroidDiagnostic( "GLES Create_Targets failed" );
 #endif
         error = "OpenGL ES could not create the back/depth targets";
+        delete frame;
+        return NULL;
+    }
+
+    state->PresentProgram = CreatePresentProgram(state->PresentSampler);
+    glGenVertexArrays(1, &state->PresentVao);
+    if (state->PresentProgram == 0 || state->PresentVao == 0) {
+#if defined(__ANDROID__)
+        appendAndroidDiagnostic("GLES presenter program/VAO creation failed");
+#endif
+        error = "OpenGL ES could not initialize the Android surface presenter";
         delete frame;
         return NULL;
     }
@@ -875,13 +980,17 @@ void SdlGpuFrame::Release_Targets()
 SdlGpuFrame::~SdlGpuFrame()
 {
     Flush();
+#if defined(__ANDROID__)
+    GlesFrameState *state = State(this);
+    if (state != NULL)
+        SDL_GL_MakeCurrent(state->Window, state->Context);
+#endif
     Release_Targets();
     if (StreamBuffer != NULL) {
         Gles_Delete_Buffer(StreamBuffer);
         StreamBuffer = NULL;
     }
 #if defined(__ANDROID__)
-    GlesFrameState *state = State(this);
     if (state != NULL) {
 #if defined(__ANDROID__)
         {
@@ -890,7 +999,8 @@ SdlGpuFrame::~SdlGpuFrame()
             appendAndroidDiagnostic(diagnostic);
         }
 #endif
-        SDL_GL_MakeCurrent(state->Window, state->Context);
+        if (state->PresentVao != 0) glDeleteVertexArrays(1, &state->PresentVao);
+        if (state->PresentProgram != 0) glDeleteProgram(state->PresentProgram);
         if (state->UniformBuffers[0] != 0) glDeleteBuffers(2, state->UniformBuffers);
         if (state->TargetFbo != 0) glDeleteFramebuffers(1, &state->TargetFbo);
         SDL_GL_DestroyContext(state->Context);
@@ -1113,32 +1223,66 @@ bool SdlGpuFrame::Present(const uint16_t (*ramp)[256])
         return false;
     }
 
-    glBindFramebuffer(GL_READ_FRAMEBUFFER, back->Fbo);
-    glBindFramebuffer(GL_DRAW_FRAMEBUFFER, 0);
-    glBlitFramebuffer(0, 0, (GLint)BackWidth, (GLint)BackHeight,
-        0, 0, (GLint)state->DrawableWidth, (GLint)state->DrawableHeight,
-        GL_COLOR_BUFFER_BIT, GL_NEAREST);
-    const GLenum blitError = glGetError();
+    // Drain stale errors from the engine's draw commands so the result below belongs
+    // to this presentation operation, not an earlier draw.
+    while (glGetError() != GL_NO_ERROR) {}
+
     glBindFramebuffer(GL_FRAMEBUFFER, 0);
     glViewport(0, 0, (GLsizei)state->DrawableWidth, (GLsizei)state->DrawableHeight);
+    glDisable(GL_CULL_FACE);
+#ifdef GL_RASTERIZER_DISCARD
+    glDisable(GL_RASTERIZER_DISCARD);
+#endif
 
+    // Sample the RGBA8 engine target into the window's actual EGL surface. A shader
+    // presentation works across RGB/RGBA EGL configs and avoids GLES blit-format
+    // restrictions that can leave a successful SwapWindow displaying only black.
+    glUseProgram(state->PresentProgram);
+    glBindVertexArray(state->PresentVao);
+    glActiveTexture(GL_TEXTURE0);
+    glBindTexture(GL_TEXTURE_2D, back->Name);
+    glUniform1i(state->PresentSampler, 0);
+    glDrawArrays(GL_TRIANGLES, 0, 3);
+    const GLenum shaderError = glGetError();
+    const bool shaderPresented = shaderError == GL_NO_ERROR;
+
+    glBindTexture(GL_TEXTURE_2D, 0);
+    glBindVertexArray(0);
+    glUseProgram(0);
+
+    GLenum presentError = shaderError;
+    const char *presentPath = "shader";
+    if (!shaderPresented) {
+        // Retain the former path as a best-effort fallback for unusual drivers.
+        while (glGetError() != GL_NO_ERROR) {}
+        glBindFramebuffer(GL_READ_FRAMEBUFFER, back->Fbo);
+        glBindFramebuffer(GL_DRAW_FRAMEBUFFER, 0);
+        glBlitFramebuffer(0, 0, (GLint)BackWidth, (GLint)BackHeight,
+            0, 0, (GLint)state->DrawableWidth, (GLint)state->DrawableHeight,
+            GL_COLOR_BUFFER_BIT, GL_NEAREST);
+        presentError = glGetError();
+        presentPath = "blit-fallback";
+    }
+
+    glBindFramebuffer(GL_FRAMEBUFFER, 0);
+    glViewport(0, 0, (GLsizei)state->DrawableWidth, (GLsizei)state->DrawableHeight);
     const bool swapped = SDL_GL_SwapWindow(state->Window);
 #if defined(__ANDROID__)
     {
         static unsigned int reports = 0;
-        if (reports < 5 || !swapped || blitError != GL_NO_ERROR) {
+        if (reports < 5 || !swapped || presentError != GL_NO_ERROR || !shaderPresented) {
             char diagnostic[768];
             snprintf(diagnostic, sizeof(diagnostic),
-                "GLES Present: back=%ux%u drawable=%ux%u blitError=0x%04X swap=%s",
-                BackWidth, BackHeight, state->DrawableWidth, state->DrawableHeight,
-                (unsigned)blitError, swapped ? "OK" : "FAIL");
+                "GLES Present: path=%s back=%ux%u drawable=%ux%u shaderError=0x%04X presentError=0x%04X swap=%s",
+                presentPath, BackWidth, BackHeight, state->DrawableWidth, state->DrawableHeight,
+                (unsigned)shaderError, (unsigned)presentError, swapped ? "OK" : "FAIL");
             appendAndroidDiagnostic(diagnostic);
             ++reports;
         }
     }
 #endif
     (void)front;
-    return blitError == GL_NO_ERROR && swapped;
+    return presentError == GL_NO_ERROR && swapped;
 }
 
 void SdlGpuFrame::Take_Timing(double &flush_ms, double &fence_ms, unsigned int &flushes, double &acquire_ms,

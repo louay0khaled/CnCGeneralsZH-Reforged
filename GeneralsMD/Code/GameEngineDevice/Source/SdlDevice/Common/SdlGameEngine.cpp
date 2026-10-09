@@ -221,11 +221,16 @@ void SdlGameEngine::createWindow( void )
 		 changes nothing. */
 	SDL_WindowFlags flags = SDL_WINDOW_HIGH_PIXEL_DENSITY;
 #if defined(__ANDROID__)
-	// SDL3 requires OpenGL context attributes to be set before the OpenGL window is created.
-	// Android uses the GLES 3.0 path implemented by GlesSdlGpuFrame.
+	// Android: choose a predictable RGBA8888 EGL config before SDL creates the native
+	// window/surface. Some devices otherwise select an RGB config with no alpha bits.
+	// The GLES presenter samples the engine's RGBA8 render target into this surface.
 	SDL_GL_SetAttribute( SDL_GL_CONTEXT_PROFILE_MASK, SDL_GL_CONTEXT_PROFILE_ES );
 	SDL_GL_SetAttribute( SDL_GL_CONTEXT_MAJOR_VERSION, 3 );
 	SDL_GL_SetAttribute( SDL_GL_CONTEXT_MINOR_VERSION, 0 );
+	SDL_GL_SetAttribute( SDL_GL_RED_SIZE, 8 );
+	SDL_GL_SetAttribute( SDL_GL_GREEN_SIZE, 8 );
+	SDL_GL_SetAttribute( SDL_GL_BLUE_SIZE, 8 );
+	SDL_GL_SetAttribute( SDL_GL_ALPHA_SIZE, 8 );
 	SDL_GL_SetAttribute( SDL_GL_DOUBLEBUFFER, 1 );
 	SDL_GL_SetAttribute( SDL_GL_DEPTH_SIZE, 24 );
 	SDL_GL_SetAttribute( SDL_GL_STENCIL_SIZE, 8 );
