@@ -843,8 +843,8 @@ RenderResult PosixDevice9::SetVertexDeclaration(IDirect3DVertexDeclaration9 *dec
 {
 	Posix_Bind(Declaration, declaration);
 	DeclarationIsCurrent = declaration != NULL;
-	// D3D9 treats a vertex declaration and an FVF as mutually exclusive.
-	FVF = 0;
+	// Keep an already-known FVF as the backend's stream-stride/layout hint. The engine's vertex
+	// declaration can describe only shader inputs, whereas the existing FVF describes the full VB.
 	return D3D_OK;
 }
 
@@ -858,6 +858,10 @@ RenderResult PosixDevice9::SetFVF(RenderUInt32 fvf)
 RenderUInt32 PosixDevice9::FVF_For_Draw() const
 {
 	if (!DeclarationIsCurrent)
+		return FVF;
+	// When the engine set an FVF for this stream already, preserve that layout: shader declarations
+	// often name a subset of the stream and may include D3D8 skip tokens the FVF cannot encode.
+	if (FVF != 0)
 		return FVF;
 	if (Declaration == NULL)
 		return 0;
