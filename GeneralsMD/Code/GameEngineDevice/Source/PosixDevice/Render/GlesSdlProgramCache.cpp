@@ -27,6 +27,7 @@
 #include "ffvertex.h"
 
 #include <SDL3/SDL.h>
+#include <stdio.h>
 
 #include "GlesRenderCommon.h"
 #include <spirv_cross_c.h>
