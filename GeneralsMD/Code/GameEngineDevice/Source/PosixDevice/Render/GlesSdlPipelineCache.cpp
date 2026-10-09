@@ -19,6 +19,7 @@
 // Pipelines and samplers on SDL3 GPU (decision 7, phase A3c).  See SdlPipelineCache.h.
 
 #include "SdlPipelineCache.h"
+#include "Common/CrashHandler.h"
 #include "SdlCreationLog.h"
 
 #include <SDL3/SDL.h>
@@ -608,6 +609,15 @@ SDL_GPUGraphicsPipeline *SdlPipelineCache::Pipeline(const SdlPipelineKey &key)
     if (opaque == NULL) {
         fprintf(stderr, "GlesPipelineCache: pipeline refused: %s; FVF 0x%x primitive %u depth %u/%u\n",
             refusal.c_str(), (unsigned)key.FVF, (unsigned)key.Primitive, (unsigned)key.DepthTest, (unsigned)key.DepthWrite);
+#if defined(__ANDROID__)
+        // Preserve the actual GL link error in the app's retrievable native startup trace.
+        char androidDiagnostic[768];
+        snprintf(androidDiagnostic, sizeof(androidDiagnostic),
+            "ANDROID GLES PIPELINE REFUSED: reason=%.480s FVF=0x%x primitive=%u depth=%u/%u",
+            refusal.c_str(), (unsigned)key.FVF, (unsigned)key.Primitive,
+            (unsigned)key.DepthTest, (unsigned)key.DepthWrite);
+        appendAndroidDiagnostic(androidDiagnostic);
+#endif
         if (Sdl_Creation_Log_Asked()) {
             char line[1024];
             snprintf(line, sizeof(line),
