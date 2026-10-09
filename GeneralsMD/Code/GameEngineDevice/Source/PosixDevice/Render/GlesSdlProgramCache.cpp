@@ -69,6 +69,7 @@ bool Gles_Compile_SPIRV_To_GLSLES(const std::vector<unsigned char> &spirv, bool 
     if (spvc_compiler_create_compiler_options(compiler, &options) != SPVC_SUCCESS ||
         spvc_compiler_options_set_bool(options, SPVC_COMPILER_OPTION_GLSL_ES, SPVC_TRUE) != SPVC_SUCCESS ||
         spvc_compiler_options_set_uint(options, SPVC_COMPILER_OPTION_GLSL_VERSION, 300) != SPVC_SUCCESS ||
+        spvc_compiler_options_set_bool(options, SPVC_COMPILER_OPTION_GLSL_FORCE_FLATTENED_IO_BLOCKS, SPVC_TRUE) != SPVC_SUCCESS ||
         (vertex_stage && spvc_compiler_options_set_bool(options, SPVC_COMPILER_OPTION_FIXUP_DEPTH_CONVENTION, SPVC_TRUE) != SPVC_SUCCESS) ||
         spvc_compiler_install_compiler_options(compiler, options) != SPVC_SUCCESS) {
         log = Gles_Spvc_Error(context, "SPIRV-Cross could not configure GLSL ES 3.00");
@@ -88,6 +89,27 @@ bool Gles_Compile_SPIRV_To_GLSLES(const std::vector<unsigned char> &spirv, bool 
                 spvc_compiler_unset_decoration(compiler, list[i].id, SpvDecorationDescriptorSet);
                 if (uniform_blocks != NULL && list[i].name != NULL && list[i].name[0] != '\\0')
                     uniform_blocks->push_back(std::make_pair(std::string(list[i].name), binding));
+            }
+        }
+    }
+
+    // GLES 3.00 flattens HLSL interface structs into individual varyings. SPIRV-Cross
+    // prefixes those varying names with the interface variable name, so HLSL's "output"
+    // and "input" would become output_TexCoord0 vs input_TexCoord0 and fail program linking.
+    // Give the vertex outputs and fragment inputs the same stable base name before compiling.
+    if (resources != NULL) {
+        const spvc_resource_type linkage_type = vertex_stage
+            ? SPVC_RESOURCE_TYPE_STAGE_OUTPUT : SPVC_RESOURCE_TYPE_STAGE_INPUT;
+        const spvc_reflected_resource *linkage = NULL;
+        size_t linkage_count = 0;
+        if (spvc_resources_get_resource_list_for_type(resources, linkage_type,
+            &linkage, &linkage_count) == SPVC_SUCCESS) {
+            for (size_t i = 0; i < linkage_count; ++i) {
+                const spvc_type base_type =
+                    spvc_compiler_get_type_handle(compiler, linkage[i].base_type_id);
+                if (base_type != NULL && spvc_type_get_basetype(base_type) == SPVC_BASETYPE_STRUCT) {
+                    spvc_compiler_set_name(compiler, linkage[i].id, "zh_io");
+                }
             }
         }
     }
