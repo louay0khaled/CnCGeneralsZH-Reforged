@@ -1240,6 +1240,9 @@ bool SdlGpuFrame::Present(const uint16_t (*ramp)[256])
     glUseProgram(state->PresentProgram);
     glBindVertexArray(state->PresentVao);
     glActiveTexture(GL_TEXTURE0);
+    // The previous game draw may have left a mipmapped/repeating sampler object on
+    // unit zero. Render targets have no mip chain, so force texture-owned sampling.
+    glBindSampler(0, 0);
     glBindTexture(GL_TEXTURE_2D, back->Name);
     glUniform1i(state->PresentSampler, 0);
     glDrawArrays(GL_TRIANGLES, 0, 3);
