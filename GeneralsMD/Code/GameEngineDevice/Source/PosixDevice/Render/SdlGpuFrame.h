@@ -117,6 +117,12 @@ public:
 	/// order between the passes (StretchRect).
 	void Record_Blit(SDL_GPUTexture * source, const int32_t source_rect[4], SDL_GPUTexture * destination,
 		const int32_t destination_rect[4], bool linear);
+#if defined(__ANDROID__)
+	/// Persistent scratch texture used to snapshot a render target before a draw samples it.
+	SDL_GPUTexture * Feedback_Copy_For(unsigned int width, unsigned int height);
+	/// Record the GL objects involved before replacing a feedback-loop sampler with a snapshot.
+	void Log_Feedback_Loop(SDL_GPUTexture * texture, SDL_GPUGraphicsPipeline * pipeline);
+#endif
 
 	/// D3DCLEAR_TARGET, _ZBUFFER and _STENCIL over the whole current target, recorded for the next pass.  A
 	/// later clear of the same thing replaces an earlier one, as the second would overwrite the first.
@@ -312,6 +318,10 @@ private:
 	bool TargetSet;						///< CurrentTarget was given; the back buffer otherwise
 	struct ScratchDepth { SDL_GPUTexture * Texture; uint32_t Width, Height; };
 	std::vector<ScratchDepth> ScratchDepths;
+#if defined(__ANDROID__)
+	struct FeedbackCopy { SDL_GPUTexture * Texture; uint32_t Width, Height; };
+	std::vector<FeedbackCopy> FeedbackCopies;
+#endif
 	uint32_t Target_Index();
 	std::vector<SdlRecordedDraw> Draws;
 	std::vector<ArenaByte> StreamBytes;
