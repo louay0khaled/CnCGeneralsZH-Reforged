@@ -19,6 +19,7 @@
 // The generated programs on SDL3 GPU (decision 7, phase A3c).  See SdlProgramCache.h.
 
 #include "SdlProgramCache.h"
+#include "Common/CrashHandler.h"
 #include "SdlCreationLog.h"
 #include "sdl3shadercompile.h"
 #include "engineshader.h"
@@ -36,6 +37,81 @@ static std::string Gles_Spvc_Error(spvc_context context, const char *fallback)
 {
     const char *error = context != NULL ? spvc_context_get_last_error_string(context) : NULL;
     return error != NULL && error[0] != '\0' ? std::string(error) : std::string(fallback);
+}
+
+/*
+ * SPIRV-Cross flattens HLSL interface structs for GLES 3.00. Its generated varying
+ * names can include both the outer interface variable ("output"/"input") and the
+ * struct member name, so equal HLSL semantics may otherwise link under different
+ * GLSL names. Rename reflected stage inputs/outputs by their SPIR-V Location, not
+ * by an assumed HLSL variable name. This mirrors SPIRV-Cross's
+ * rename_interface_variable utility using the C API available in the pinned vendor.
+ */
+static void Gles_Rename_Interface_Varyings(spvc_compiler compiler, spvc_resources resources,
+    bool vertex_stage)
+{
+    const spvc_resource_type resource_type = vertex_stage
+        ? SPVC_RESOURCE_TYPE_STAGE_OUTPUT : SPVC_RESOURCE_TYPE_STAGE_INPUT;
+    const spvc_reflected_resource *interfaces = NULL;
+    size_t interface_count = 0;
+    if (spvc_resources_get_resource_list_for_type(resources, resource_type,
+        &interfaces, &interface_count) != SPVC_SUCCESS) {
+        return;
+    }
+
+    static unsigned int trace_count = 0;
+    for (size_t i = 0; i < interface_count; ++i) {
+        const spvc_reflected_resource &resource = interfaces[i];
+        const spvc_type base_type = spvc_compiler_get_type_handle(compiler, resource.base_type_id);
+        const bool is_struct = base_type != NULL
+            && spvc_type_get_basetype(base_type) == SPVC_BASETYPE_STRUCT;
+        const bool variable_has_location =
+            spvc_compiler_has_decoration(compiler, resource.id, SpvDecorationLocation) != 0;
+        const unsigned int variable_location = variable_has_location
+            ? spvc_compiler_get_decoration(compiler, resource.id, SpvDecorationLocation) : 0u;
+        const char *old_name_ptr = spvc_compiler_get_name(compiler, resource.id);
+        char old_name[128];
+        snprintf(old_name, sizeof(old_name), "%s",
+            old_name_ptr != NULL ? old_name_ptr : "(unnamed)");
+
+        if (is_struct) {
+            // Flattened block members must also have identical names in both stages.
+            spvc_compiler_set_name(compiler, resource.base_type_id, "GlesInterfaceBlock");
+            const unsigned int members = spvc_type_get_num_member_types(base_type);
+            for (unsigned int member = 0; member < members; ++member) {
+                char member_name[64];
+                if (spvc_compiler_has_member_decoration(compiler, resource.base_type_id,
+                    member, SpvDecorationLocation)) {
+                    const unsigned int location = spvc_compiler_get_member_decoration(compiler,
+                        resource.base_type_id, member, SpvDecorationLocation);
+                    snprintf(member_name, sizeof(member_name), "zh_varying_%u", location);
+                } else {
+                    // System values and compiler-generated fields may not have a user location.
+                    snprintf(member_name, sizeof(member_name), "GlesInterfaceMember_%u", member);
+                }
+                spvc_compiler_set_member_name(compiler, resource.base_type_id, member, member_name);
+            }
+            // Stable outer name is needed because GLES 3.00 flattens with this name as a prefix.
+            spvc_compiler_set_name(compiler, resource.id, "zh_io");
+        } else if (variable_has_location) {
+            char name[64];
+            snprintf(name, sizeof(name), "zh_varying_%u", variable_location);
+            spvc_compiler_set_name(compiler, resource.id, name);
+        }
+
+#if defined(__ANDROID__)
+        if (trace_count < 24 && (variable_has_location || is_struct)) {
+            char diagnostic[384];
+            snprintf(diagnostic, sizeof(diagnostic),
+                "GLES varying remap: stage=%s old=%s location=%s%u struct=%u",
+                vertex_stage ? "vertex-out" : "fragment-in", old_name,
+                variable_has_location ? "" : "member-based/", variable_location,
+                is_struct ? 1u : 0u);
+            appendAndroidDiagnostic(diagnostic);
+            ++trace_count;
+        }
+#endif
+    }
 }
 
 bool Gles_Compile_SPIRV_To_GLSLES(const std::vector<unsigned char> &spirv, bool vertex_stage,
@@ -93,25 +169,8 @@ bool Gles_Compile_SPIRV_To_GLSLES(const std::vector<unsigned char> &spirv, bool 
         }
     }
 
-    // GLES 3.00 flattens HLSL interface structs into individual varyings. SPIRV-Cross
-    // prefixes those varying names with the interface variable name, so HLSL's "output"
-    // and "input" would become output_TexCoord0 vs input_TexCoord0 and fail program linking.
-    // Give the vertex outputs and fragment inputs the same stable base name before compiling.
     if (resources != NULL) {
-        const spvc_resource_type linkage_type = vertex_stage
-            ? SPVC_RESOURCE_TYPE_STAGE_OUTPUT : SPVC_RESOURCE_TYPE_STAGE_INPUT;
-        const spvc_reflected_resource *linkage = NULL;
-        size_t linkage_count = 0;
-        if (spvc_resources_get_resource_list_for_type(resources, linkage_type,
-            &linkage, &linkage_count) == SPVC_SUCCESS) {
-            for (size_t i = 0; i < linkage_count; ++i) {
-                const spvc_type base_type =
-                    spvc_compiler_get_type_handle(compiler, linkage[i].base_type_id);
-                if (base_type != NULL && spvc_type_get_basetype(base_type) == SPVC_BASETYPE_STRUCT) {
-                    spvc_compiler_set_name(compiler, linkage[i].id, "zh_io");
-                }
-            }
-        }
+        Gles_Rename_Interface_Varyings(compiler, resources, vertex_stage);
     }
 
     if (!vertex_stage && spvc_compiler_build_combined_image_samplers(compiler) == SPVC_SUCCESS) {
