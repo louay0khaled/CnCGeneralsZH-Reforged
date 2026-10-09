@@ -32,6 +32,7 @@ namespace
 struct Finger
 {
     Bool active;
+    Bool ui;
     SDL_FingerID id;
     Int x, y;
     Int startX, startY;
@@ -51,7 +52,9 @@ UnsignedInt g_pendingAt = 0;
 
 static Int ActiveCount()
 {
-    return (g_fingers[0].active ? 1 : 0) + (g_fingers[1].active ? 1 : 0);
+    // UI touches must never be counted as battlefield gesture fingers.
+    return ((g_fingers[0].active && !g_fingers[0].ui) ? 1 : 0) +
+        ((g_fingers[1].active && !g_fingers[1].ui) ? 1 : 0);
 }
 
 static Finger *Find(SDL_FingerID id)
@@ -98,6 +101,13 @@ static void UiMouseUp(Int x, Int y, UnsignedInt now)
     if (SdlMouse::active() != nullptr)
         SdlMouse::active()->addEvent(SdlMouse::EVENT_BUTTON_UP, x, y,
             SdlMouse::BUTTON_LEFT, 1, 0, now);
+}
+
+static void UiMouseMove(Int x, Int y, UnsignedInt now)
+{
+    if (SdlMouse::active() != nullptr)
+        SdlMouse::active()->addEvent(SdlMouse::EVENT_MOVE, x, y,
+            SdlMouse::BUTTON_LEFT, 0, 0, now);
 }
 
 static Drawable *PickForSelection(const ICoord2D &pixel)
@@ -192,7 +202,8 @@ static Real Distance(const Finger &a, const Finger &b)
 
 static void UpdatePinch()
 {
-    if (!g_fingers[0].active || !g_fingers[1].active || TheTacticalView == nullptr)
+    if (!g_fingers[0].active || g_fingers[0].ui ||
+        !g_fingers[1].active || g_fingers[1].ui || TheTacticalView == nullptr)
         return;
 
     const Real distance = Distance(g_fingers[0], g_fingers[1]);
@@ -228,6 +239,12 @@ namespace TouchInput
 
 void reset()
 {
+    // Release any UI button held when Android pauses or loses window focus.
+    const UnsignedInt now = (UnsignedInt)SDL_GetTicks();
+    for (Int i = 0; i < 2; ++i) {
+        if (g_fingers[i].active && g_fingers[i].ui)
+            UiMouseUp(g_fingers[i].x, g_fingers[i].y, now);
+    }
     memset(g_fingers, 0, sizeof(g_fingers));
     g_panning = FALSE;
     g_pinching = FALSE;
@@ -242,19 +259,22 @@ Bool dispatch(const SDL_Event &event)
         Int x, y;
         TouchToGamePixels(event.tfinger.x, event.tfinger.y, x, y);
 
-        if (IsUiPoint(x, y))
-        {
-            UiMouseDown(x, y, (UnsignedInt)(event.tfinger.timestamp / 1000000u));
-            return TRUE;
-        }
-
         Finger *slot = FreeFinger();
         if (slot == nullptr)
             return TRUE;
         slot->active = TRUE;
+        slot->ui = IsUiPoint(x, y);
         slot->id = event.tfinger.fingerID;
         slot->x = slot->startX = x;
         slot->y = slot->startY = y;
+
+        if (slot->ui) {
+            // A UI press has a full down/move/up lifetime and cancels a pending
+            // battlefield tap so a menu press cannot accidentally become a double tap.
+            g_pendingTap = FALSE;
+            UiMouseDown(x, y, (UnsignedInt)(event.tfinger.timestamp / 1000000u));
+            return TRUE;
+        }
 
         if (ActiveCount() == 2)
         {
@@ -278,6 +298,14 @@ Bool dispatch(const SDL_Event &event)
 
         Int x, y;
         TouchToGamePixels(event.tfinger.x, event.tfinger.y, x, y);
+
+        if (finger->ui) {
+            if (x != finger->x || y != finger->y)
+                UiMouseMove(x, y, (UnsignedInt)(event.tfinger.timestamp / 1000000u));
+            finger->x = x;
+            finger->y = y;
+            return TRUE;
+        }
 
         if (IsUiPoint(x, y))
         {
@@ -321,16 +349,28 @@ Bool dispatch(const SDL_Event &event)
 
         Int x, y;
         TouchToGamePixels(event.tfinger.x, event.tfinger.y, x, y);
-        const Bool wasPanning = g_panning;
-        const Bool wasPinching = g_pinching;
+        const UnsignedInt now = (UnsignedInt)(event.tfinger.timestamp / 1000000u);
 
-        if (IsUiPoint(x, y))
-        {
-            if (event.type == SDL_EVENT_FINGER_UP)
-                UiMouseUp(x, y, (UnsignedInt)(event.tfinger.timestamp / 1000000u));
+        if (finger->ui) {
+            // Release even for FINGER_CANCELED or when the finger leaves the widget;
+            // otherwise the mouse emulation can leave a menu button logically pressed.
+            UiMouseUp(x, y, now);
+            finger->active = FALSE;
+            finger->ui = FALSE;
+            if (ActiveCount() == 0) {
+                g_panning = FALSE;
+                g_pinching = FALSE;
+            } else if (ActiveCount() == 1) {
+                g_pinching = FALSE;
+                g_panning = FALSE;
+            }
+            return TRUE;
         }
 
+        const Bool wasPanning = g_panning;
+        const Bool wasPinching = g_pinching;
         finger->active = FALSE;
+        finger->ui = FALSE;
 
         if (ActiveCount() == 0)
         {
