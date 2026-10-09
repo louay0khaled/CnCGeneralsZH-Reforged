@@ -24,6 +24,7 @@
 // shadow map) are not A3's.  And D3D9's documented initial states, which the draw is the first to read.
 
 #include "PosixDevice9.h"
+#include "Common/CrashHandler.h"
 #include "PosixResources9.h"
 #include "SdlConstants.h"
 #include "SdlCreationLog.h"
@@ -488,6 +489,15 @@ void PosixDevice9::Refuse_Draw(const std::string &reason)
 	const unsigned int before = count++;
 	if (before == 0) {
 		fprintf(stderr, "PosixDevice9: a draw refused: %s\n", reason.c_str());
+#if defined(__ANDROID__)
+		static unsigned int startupRefusalReports = 0;
+		if (startupRefusalReports < 32) {
+			char diagnostic[768];
+			snprintf(diagnostic, sizeof(diagnostic), "ANDROID DRAW REFUSED: %s", reason.c_str());
+			appendAndroidDiagnostic(diagnostic);
+			++startupRefusalReports;
+		}
+#endif
 		if (Sdl_Creation_Log_Asked()) {
 			char line[768];
 			snprintf(line, sizeof(line), "ANDROID DRAW REFUSED: %s", reason.c_str());
@@ -715,15 +725,29 @@ RenderResult PosixDevice9::DrawPrimitiveUP(D3DPRIMITIVETYPE type, unsigned int p
 
 RenderResult PosixDevice9::Gpu_Draw(const DrawCall &call)
 {
-	// Android GLES diagnosis: keep a tiny sample of attempts in the same buffered log as the replay.
+	// A bound D3D8/D3D9 vertex declaration remains a real vertex format when no FVF is set.
+	const RenderUInt32 drawFVF = FVF_For_Draw();
 	static unsigned int androidDrawAttempts = 0;
 	const unsigned int androidAttempt = ++androidDrawAttempts;
+#if defined(__ANDROID__)
+	if (androidAttempt <= 24) {
+		char diagnostic[512];
+		snprintf(diagnostic, sizeof(diagnostic),
+			"ANDROID DRAW ATTEMPT %u: prim=%u count=%u indexed=%u FVF=0x%x effectiveFVF=0x%x declarationCurrent=%u stride=%u VS=%u PS=%u",
+			androidAttempt, (unsigned)call.Type, call.PrimitiveCount, call.Indexed ? 1u : 0u,
+			(unsigned)FVF, (unsigned)drawFVF, DeclarationIsCurrent ? 1u : 0u,
+			call.UserVertices != NULL ? call.UserStride : StreamStrides[0],
+			VertexShader != NULL ? 1u : 0u, PixelShader != NULL ? 1u : 0u);
+		appendAndroidDiagnostic(diagnostic);
+	}
+#endif
 	if (androidAttempt <= 24 && Sdl_Creation_Log_Asked()) {
 		char line[512];
 		snprintf(line, sizeof(line),
-			"ANDROID DRAW ATTEMPT %u: prim=%u count=%u indexed=%u FVF=0x%x VS=%p PS=%p stream0=%p index=%p",
+			"ANDROID DRAW ATTEMPT %u: prim=%u count=%u indexed=%u FVF=0x%x effectiveFVF=0x%x declarationCurrent=%u VS=%p PS=%p stream0=%p index=%p",
 			androidAttempt, (unsigned)call.Type, call.PrimitiveCount, call.Indexed ? 1u : 0u,
-			(unsigned)FVF, VertexShader, PixelShader, Streams[0], Indices);
+			(unsigned)FVF, (unsigned)drawFVF, DeclarationIsCurrent ? 1u : 0u,
+			VertexShader, PixelShader, Streams[0], Indices);
 		Sdl_Creation_Log_Line(line);
 	}
 	// PERF1: the CPU time spent here, added to the frame's when ZH_GPU_TIMING asks.
@@ -798,8 +822,10 @@ RenderResult PosixDevice9::Gpu_Draw(const DrawCall &call)
 	}
 	// The stream's layout is the FVF's with a transcribed program too: D3's Trees reads the tree buffer's
 	// FVF slots, as the Direct3D 11 backend lays it out, and its D3D8 declaration only made the shader.
-	if (FVF == 0) {
-		Refuse_Draw("a vertex declaration and no FVF");
+	if (drawFVF == 0) {
+		Refuse_Draw(DeclarationIsCurrent
+			? "the current vertex declaration is not representable by the GLES FVF path"
+			: "a vertex declaration and no FVF");
 		return D3D_OK;
 	}
 	if (RenderStates[D3DRS_CLIPPLANEENABLE] != 0) {
@@ -824,7 +850,7 @@ RenderResult PosixDevice9::Gpu_Draw(const DrawCall &call)
 	// The programs and the pipeline.
 	std::string refusal;
 	SdlVertexLayout layout;
-	if (!Sdl_Vertex_Layout(FVF, layout, refusal)) {
+	if (!Sdl_Vertex_Layout(drawFVF, layout, refusal)) {
 		Refuse_Draw("the vertex format: " + refusal);
 		return D3D_OK;
 	}
@@ -859,7 +885,7 @@ RenderResult PosixDevice9::Gpu_Draw(const DrawCall &call)
 		states = without_depth;
 	}
 	SdlPipelineKey key;
-	if (!Sdl_Pipeline_Key(states, call.Type, vertex_program.Shader, pixel_program.Shader, FVF,
+	if (!Sdl_Pipeline_Key(states, call.Type, vertex_program.Shader, pixel_program.Shader, drawFVF,
 		SdlGpuFrame::Target_Format(), Gpu->Depth_Format(), key, refusal)) {
 		Refuse_Draw("the pipeline: " + refusal);
 		return D3D_OK;

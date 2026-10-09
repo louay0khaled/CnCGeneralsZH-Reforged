@@ -172,6 +172,9 @@ public:
 	/// CreateDevice calls it; a window whose GPU device cannot be made fails the device, loudly.  A test
 	/// asks for an offscreen frame on a device made without a window: it draws, and Present only flushes.
 	RenderResult Create_Gpu_Frame(bool offscreen = false);
+	/// Returns the current FVF, decoding a current vertex declaration when SetFVF was not used.
+	/// Zero means the declaration is not representable by the current GLES vertex-layout path.
+	RenderUInt32 FVF_For_Draw() const;
 	/// -offscreen's presents, paced at hz a second (0: unpaced); SdlGpuFrame::Set_Offscreen_Presents.
 	void Present_Offscreen(unsigned int hz);
 	SdlGpuFrame * Get_Gpu() const { return Gpu; }

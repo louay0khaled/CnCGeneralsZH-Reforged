@@ -21,6 +21,7 @@
 // PosixD3D9Caps.cpp.  See PosixDevice9.h for which file holds what and how a device without a window behaves.
 
 #include "PosixDevice9.h"
+#include "Common/CrashHandler.h"
 #include "SdlCreationLog.h"
 #include "Platform/EngineShaderName.h"
 #include "Platform/RendererName.h"
@@ -538,6 +539,17 @@ RenderResult PosixDevice9::Present(const RenderRect *, const RenderRect *, Rende
 	static_assert(offsetof(D3DGAMMARAMP, green) == 512 && offsetof(D3DGAMMARAMP, blue) == 1024,
 		"D3DGAMMARAMP is the three ramps back to back, as SdlGpuFrame::Present reads it");
 	++PresentCount;
+#if defined(__ANDROID__)
+	if (PresentCount <= 5 || PresentCount % 300 == 0) {
+		char health[512];
+		snprintf(health, sizeof(health),
+			"ANDROID RENDER HEALTH: present=%u recordedDraws=%u refusalKinds=%u FVF=0x%x effectiveFVF=0x%x declarationCurrent=%u stride0=%u vertexShader=%u pixelShader=%u",
+			PresentCount, DrawsRecorded, (unsigned)DrawRefusals.size(), (unsigned)FVF,
+			(unsigned)FVF_For_Draw(), DeclarationIsCurrent ? 1u : 0u, StreamStrides[0],
+			VertexShader != NULL ? 1u : 0u, PixelShader != NULL ? 1u : 0u);
+		appendAndroidDiagnostic(health);
+	}
+#endif
 	Dump_Frame_If_Asked();
 	if (Sdl_Creation_Log_Asked()) {
 		// Every frame over 50 ms, beside the creation log's lines, to line them up.
@@ -831,6 +843,8 @@ RenderResult PosixDevice9::SetVertexDeclaration(IDirect3DVertexDeclaration9 *dec
 {
 	Posix_Bind(Declaration, declaration);
 	DeclarationIsCurrent = declaration != NULL;
+	// D3D9 treats a vertex declaration and an FVF as mutually exclusive.
+	FVF = 0;
 	return D3D_OK;
 }
 
@@ -839,6 +853,143 @@ RenderResult PosixDevice9::SetFVF(RenderUInt32 fvf)
 	FVF = fvf;
 	DeclarationIsCurrent = false;
 	return D3D_OK;
+}
+
+RenderUInt32 PosixDevice9::FVF_For_Draw() const
+{
+	if (!DeclarationIsCurrent)
+		return FVF;
+	if (Declaration == NULL)
+		return 0;
+
+	const PosixVertexDeclaration9 *declaration = static_cast<const PosixVertexDeclaration9 *>(Declaration);
+	bool position = false, positionT = false, normal = false, pointSize = false;
+	bool colours[2] = { false, false };
+	bool texPresent[8] = { false, false, false, false, false, false, false, false };
+	unsigned int texFloats[8] = { 0, 0, 0, 0, 0, 0, 0, 0 };
+	RenderUInt32 fvf = 0;
+
+	for (size_t i = 0; i < declaration->Elements.size(); ++i) {
+		const D3DVERTEXELEMENT9 &element = declaration->Elements[i];
+		if (element.Stream == 0xFF)
+			break;
+		// FVF describes one tightly packed stream. Refuse exotic declarations rather than silently
+		// reinterpreting their bytes as a different vertex structure.
+		if (element.Stream != 0 || element.Method != D3DDECLMETHOD_DEFAULT)
+			return 0;
+
+		switch (element.Usage) {
+			case D3DDECLUSAGE_POSITION:
+				if (position || element.UsageIndex != 0 || element.Type != D3DDECLTYPE_FLOAT3)
+					return 0;
+				position = true;
+				break;
+			case D3DDECLUSAGE_POSITIONT:
+				if (position || element.UsageIndex != 0 || element.Type != D3DDECLTYPE_FLOAT4)
+					return 0;
+				position = true;
+				positionT = true;
+				break;
+			case D3DDECLUSAGE_NORMAL:
+				if (normal || element.UsageIndex != 0 || element.Type != D3DDECLTYPE_FLOAT3)
+					return 0;
+				normal = true;
+				fvf |= D3DFVF_NORMAL;
+				break;
+			case D3DDECLUSAGE_PSIZE:
+				if (pointSize || element.UsageIndex != 0 || element.Type != D3DDECLTYPE_FLOAT1)
+					return 0;
+				pointSize = true;
+				fvf |= D3DFVF_PSIZE;
+				break;
+			case D3DDECLUSAGE_COLOR:
+				if (element.UsageIndex > 1 || colours[element.UsageIndex] ||
+						(element.Type != D3DDECLTYPE_D3DCOLOR && element.Type != D3DDECLTYPE_UBYTE4N))
+					return 0;
+				colours[element.UsageIndex] = true;
+				fvf |= element.UsageIndex == 0 ? D3DFVF_DIFFUSE : D3DFVF_SPECULAR;
+				break;
+			case D3DDECLUSAGE_TEXCOORD:
+				if (element.UsageIndex >= 8 || texPresent[element.UsageIndex] ||
+						element.Type < D3DDECLTYPE_FLOAT1 || element.Type > D3DDECLTYPE_FLOAT4)
+					return 0;
+				texPresent[element.UsageIndex] = true;
+				texFloats[element.UsageIndex] = (unsigned int)element.Type + 1u;
+				break;
+			default:
+				return 0;
+		}
+	}
+
+	if (!position)
+		return 0;
+	fvf |= positionT ? D3DFVF_XYZRHW : D3DFVF_XYZ;
+
+	unsigned int texCount = 0;
+	while (texCount < 8 && texPresent[texCount])
+		++texCount;
+	for (unsigned int i = texCount; i < 8; ++i) {
+		if (texPresent[i])
+			return 0;
+	}
+	fvf |= texCount << D3DFVF_TEXCOUNT_SHIFT;
+	for (unsigned int i = 0; i < texCount; ++i) {
+		switch (texFloats[i]) {
+			case 1: fvf |= D3DFVF_TEXCOORDSIZE1(i); break;
+			case 2: break;
+			case 3: fvf |= D3DFVF_TEXCOORDSIZE3(i); break;
+			case 4: fvf |= D3DFVF_TEXCOORDSIZE4(i); break;
+			default: return 0;
+		}
+	}
+
+	// FVF has a fixed attribute order. Validate every offset before letting the generated GLES pipeline
+	// use it; sparse/interleaved declarations are not safely convertible to an FVF.
+	const unsigned int positionBytes = positionT ? 16u : 12u;
+	const unsigned int normalBytes = normal ? 12u : 0u;
+	const unsigned int pointBytes = pointSize ? 4u : 0u;
+	const unsigned int diffuseBytes = colours[0] ? 4u : 0u;
+	const unsigned int specularBytes = colours[1] ? 4u : 0u;
+	const unsigned int texBase = positionBytes + normalBytes + pointBytes + diffuseBytes + specularBytes;
+	for (size_t i = 0; i < declaration->Elements.size(); ++i) {
+		const D3DVERTEXELEMENT9 &element = declaration->Elements[i];
+		if (element.Stream == 0xFF)
+			break;
+		unsigned int expectedOffset = 0;
+		switch (element.Usage) {
+			case D3DDECLUSAGE_POSITION:
+			case D3DDECLUSAGE_POSITIONT:
+				expectedOffset = 0;
+				break;
+			case D3DDECLUSAGE_NORMAL:
+				expectedOffset = positionBytes;
+				break;
+			case D3DDECLUSAGE_PSIZE:
+				expectedOffset = positionBytes + normalBytes;
+				break;
+			case D3DDECLUSAGE_COLOR:
+				expectedOffset = positionBytes + normalBytes + pointBytes + (element.UsageIndex == 1 ? diffuseBytes : 0u);
+				break;
+			case D3DDECLUSAGE_TEXCOORD:
+				expectedOffset = texBase;
+				for (unsigned int j = 0; j < element.UsageIndex; ++j)
+					expectedOffset += texFloats[j] * 4u;
+				break;
+			default:
+				return 0;
+		}
+		if (element.Offset != expectedOffset)
+			return 0;
+	}
+
+	SdlVertexLayout layout;
+	std::string refusal;
+	if (!Sdl_Vertex_Layout(fvf, layout, refusal))
+		return 0;
+	unsigned int expectedStride = texBase;
+	for (unsigned int i = 0; i < texCount; ++i)
+		expectedStride += texFloats[i] * 4u;
+	return layout.Stride == expectedStride ? fvf : 0;
 }
 
 void PosixDevice_Keep_D3D8_Declaration(void *declaration, const unsigned int *d3d8_tokens)
