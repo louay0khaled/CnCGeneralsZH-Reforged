@@ -541,12 +541,21 @@ RenderResult PosixDevice9::Present(const RenderRect *, const RenderRect *, Rende
 	++PresentCount;
 #if defined(__ANDROID__)
 	if (PresentCount <= 5 || PresentCount % 300 == 0) {
-		char health[512];
-		snprintf(health, sizeof(health),
-			"ANDROID RENDER HEALTH: present=%u recordedDraws=%u refusalKinds=%u FVF=0x%x effectiveFVF=0x%x declarationCurrent=%u stride0=%u vertexShader=%u pixelShader=%u",
-			PresentCount, DrawsRecorded, (unsigned)DrawRefusals.size(), (unsigned)FVF,
-			(unsigned)FVF_For_Draw(), DeclarationIsCurrent ? 1u : 0u, StreamStrides[0],
-			VertexShader != NULL ? 1u : 0u, PixelShader != NULL ? 1u : 0u);
+		char health[1024];
+		if (DrawRefusals.empty()) {
+			snprintf(health, sizeof(health),
+				"ANDROID RENDER HEALTH: present=%u recordedDraws=%u refusalKinds=0 FVF=0x%x effectiveFVF=0x%x declarationCurrent=%u stride0=%u vertexShader=%u pixelShader=%u",
+				PresentCount, DrawsRecorded, (unsigned)FVF, (unsigned)FVF_For_Draw(),
+				DeclarationIsCurrent ? 1u : 0u, StreamStrides[0],
+				VertexShader != NULL ? 1u : 0u, PixelShader != NULL ? 1u : 0u);
+		} else {
+			const std::map<std::string, unsigned int>::const_iterator refusal = DrawRefusals.begin();
+			snprintf(health, sizeof(health),
+				"ANDROID RENDER HEALTH: present=%u recordedDraws=%u refusalKinds=%u firstRefusalCount=%u firstRefusal=%s FVF=0x%x effectiveFVF=0x%x declarationCurrent=%u stride0=%u vertexShader=%u pixelShader=%u",
+				PresentCount, DrawsRecorded, (unsigned)DrawRefusals.size(), refusal->second, refusal->first.c_str(),
+				(unsigned)FVF, (unsigned)FVF_For_Draw(), DeclarationIsCurrent ? 1u : 0u, StreamStrides[0],
+				VertexShader != NULL ? 1u : 0u, PixelShader != NULL ? 1u : 0u);
+		}
 		appendAndroidDiagnostic(health);
 	}
 #endif
