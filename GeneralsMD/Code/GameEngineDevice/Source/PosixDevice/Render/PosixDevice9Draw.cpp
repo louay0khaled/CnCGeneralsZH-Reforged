@@ -917,8 +917,12 @@ RenderResult PosixDevice9::Gpu_Draw(const DrawCall &call)
 	const bool stage_indices = call.Indexed && (fan || is_dynamic(index_buffer));
 	const unsigned int index_size = (call.Indexed && index_buffer->format() == D3DFMT_INDEX32) ? 4 : 2;
 
-	// The GPU copies.  Bringing one up to date can flush the batch, which leaves the ones already asked
+	// The GPU copies. Bringing one up to date can flush the batch, which leaves the ones already asked
 	// for marked as used by the batch before: so ask again until a round flushes nothing.
+#if defined(__ANDROID__)
+	SDL_GPUTexture *feedback_copy = NULL;
+	uint64_t feedback_copy_batch = ~static_cast<uint64_t>(0);
+#endif
 	for (int round = 0; round < 3; ++round) {
 		const uint64_t batch = Gpu->Batch();
 		++phases.Rounds;
@@ -935,9 +939,32 @@ RenderResult PosixDevice9::Gpu_Draw(const DrawCall &call)
 			draw.Textures[slot] = texture != NULL ? Mirrors->Texture(texture, refusal) : Mirrors->White();
 			phases.Part(0, since);
 			if (draw.Textures[slot] != NULL && draw.Textures[slot] == target.Colour) {
-				// Undefined in D3D9, and an error on SDL3 GPU: the pass would read what it writes.
+#if defined(__ANDROID__)
+				// GLES forbids sampling the same texture currently attached for colour output. Snapshot
+				// that attachment into a separate texture immediately before the composite draw, then
+				// sample the snapshot. Record_Blit is ordered with the frame's commands, so earlier draws
+				// into this target are included and the composite itself never creates a feedback loop.
+				if (feedback_copy == NULL) {
+					Gpu->Log_Feedback_Loop(target.Colour, draw.Pipeline);
+					feedback_copy = Gpu->Feedback_Copy_For(target.Width, target.Height);
+				}
+				if (feedback_copy == NULL) {
+					Refuse_Draw("could not allocate a GLES render-target feedback snapshot");
+					return D3D_OK;
+				}
+				const uint64_t current_batch = Gpu->Batch();
+				if (feedback_copy_batch != current_batch) {
+					const int32_t rect[4] = { 0, 0, (int32_t)target.Width, (int32_t)target.Height };
+					Gpu->Record_Blit(target.Colour, rect, feedback_copy, rect, false);
+					feedback_copy_batch = current_batch;
+					appendAndroidDiagnostic("GLES FEEDBACK SNAPSHOT: colour attachment copied before composite draw");
+				}
+				draw.Textures[slot] = feedback_copy;
+#else
+				// Outside the GLES backend, preserve the original refusal rather than changing desktop D3D9 behaviour.
 				Refuse_Draw("sampling the render target it draws into");
 				return D3D_OK;
+#endif
 			}
 			if (draw.Textures[slot] == NULL) {
 				Refuse_Draw("the texture: " + refusal);
