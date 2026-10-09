@@ -463,7 +463,21 @@ static bool DrawOne(const SdlRecordedDraw &draw, const GlesBuffer *stagedBuffer,
         glDisable(GL_SCISSOR_TEST);
     }
 
-    if (!SetupAttributes(*pipeline, draw, vertices, targetHeight)) return false;
+    if (!SetupAttributes(*pipeline, draw, vertices, targetHeight)) {
+#if defined(__ANDROID__)
+        static unsigned int attributeReports = 0;
+        if (attributeReports < 12) {
+            char diagnostic[512];
+            snprintf(diagnostic, sizeof(diagnostic),
+                "GLES draw rejected: vertex attribute setup failed program=%u vertexBuffer=%u target=%ux%u attributes=%u",
+                (unsigned)pipeline->Program, vertices != NULL ? (unsigned)vertices->Name : 0u,
+                targetWidth, targetHeight, pipeline->Layout.AttributeCount);
+            appendAndroidDiagnostic(diagnostic);
+            ++attributeReports;
+        }
+#endif
+        return false;
+    }
 
     if (draw.VertexConstantsSize != 0 && draw.VertexConstants + draw.VertexConstantsSize <= constantsSize)
         BindUniformBlockState(state, 0, constants + draw.VertexConstants, draw.VertexConstantsSize);
@@ -483,8 +497,26 @@ static bool DrawOne(const SdlRecordedDraw &draw, const GlesBuffer *stagedBuffer,
         glBindSampler(slot, sampler != NULL ? sampler->Name : 0);
     }
 
-    while (glGetError() != GL_NO_ERROR) {
+    GLenum stateError = GL_NO_ERROR;
+    unsigned int stateErrorCount = 0;
+    GLenum pendingError = GL_NO_ERROR;
+    while ((pendingError = glGetError()) != GL_NO_ERROR) {
+        if (stateError == GL_NO_ERROR) stateError = pendingError;
+        ++stateErrorCount;
     }
+#if defined(__ANDROID__)
+    if (stateError != GL_NO_ERROR) {
+        static unsigned int stateErrorReports = 0;
+        if (stateErrorReports < 12) {
+            char diagnostic[512];
+            snprintf(diagnostic, sizeof(diagnostic),
+                "GLES draw setup GL error: frame=%u program=%u firstError=0x%04X errorCount=%u",
+                state->FrameId, (unsigned)pipeline->Program, (unsigned)stateError, stateErrorCount);
+            appendAndroidDiagnostic(diagnostic);
+            ++stateErrorReports;
+        }
+    }
+#endif
 
     GLenum mode = GL_TRIANGLES;
     switch (pipeline->Primitive) {
@@ -608,6 +640,10 @@ bool SdlGpuFrame::Gles_Replay()
     unsigned int clearCommands = 0;
     unsigned int skippedDraws = 0;
     unsigned int executedDraws = 0;
+    unsigned int failedDraws = 0;
+    unsigned int blitCommands = 0;
+    unsigned int failedBlits = 0;
+    unsigned int failedTargetBinds = 0;
     GlesBuffer stagedBuffer;
     memset(&stagedBuffer, 0, sizeof(stagedBuffer));
     if (!frame->StreamBytes.empty()) {
@@ -624,26 +660,88 @@ bool SdlGpuFrame::Gles_Replay()
     for (size_t i = 0; i < frame->Commands.size(); ++i) {
         const SdlGpuFrame::Command &command = frame->Commands[i];
         if (command.IsBlit) {
+            ++blitCommands;
             GlesTexture *source = Gles_Texture(command.BlitSource);
             GlesTexture *destination = Gles_Texture(command.BlitDestination);
-            if (source == NULL || destination == NULL) continue;
+            if (source == NULL || destination == NULL) {
+                ++failedBlits;
+#if defined(__ANDROID__)
+                static unsigned int invalidBlitReports = 0;
+                if (invalidBlitReports < 8) {
+                    char diagnostic[512];
+                    snprintf(diagnostic, sizeof(diagnostic),
+                        "GLES blit rejected: frame=%u cmd=%u source=%s destination=%s",
+                        state->FrameId, (unsigned)i, source != NULL ? "valid" : "null",
+                        destination != NULL ? "valid" : "null");
+                    appendAndroidDiagnostic(diagnostic);
+                    ++invalidBlitReports;
+                }
+#endif
+                continue;
+            }
             GLuint sourceTemp = 0, destinationTemp = 0;
             const GLuint sourceFbo = ReadFboFor(source, sourceTemp);
             const GLuint destinationFbo = ReadFboFor(destination, destinationTemp);
             glBindFramebuffer(GL_READ_FRAMEBUFFER, sourceFbo);
             glBindFramebuffer(GL_DRAW_FRAMEBUFFER, destinationFbo);
+            const GLenum sourceStatus = glCheckFramebufferStatus(GL_READ_FRAMEBUFFER);
+            const GLenum destinationStatus = glCheckFramebufferStatus(GL_DRAW_FRAMEBUFFER);
+            const GLenum preBlitError = glGetError();
             glBlitFramebuffer(command.Rect[0], (GLint)source->Height - command.Rect[1] - command.Rect[3],
                 command.Rect[0] + command.Rect[2], (GLint)source->Height - command.Rect[1],
                 command.BlitRect[0], (GLint)destination->Height - command.BlitRect[1] - command.BlitRect[3],
                 command.BlitRect[0] + command.BlitRect[2], (GLint)destination->Height - command.BlitRect[1],
                 GL_COLOR_BUFFER_BIT, command.BlitLinear ? GL_LINEAR : GL_NEAREST);
+            const GLenum blitError = glGetError();
+            if (sourceStatus != GL_FRAMEBUFFER_COMPLETE || destinationStatus != GL_FRAMEBUFFER_COMPLETE ||
+                preBlitError != GL_NO_ERROR || blitError != GL_NO_ERROR) {
+                ++failedBlits;
+            }
+#if defined(__ANDROID__)
+            {
+                static unsigned int blitReports = 0;
+                if (blitReports < 12 || sourceStatus != GL_FRAMEBUFFER_COMPLETE ||
+                    destinationStatus != GL_FRAMEBUFFER_COMPLETE || preBlitError != GL_NO_ERROR ||
+                    blitError != GL_NO_ERROR) {
+                    char diagnostic[768];
+                    snprintf(diagnostic, sizeof(diagnostic),
+                        "GLES BLIT: frame=%u cmd=%u srcTex=%u srcFbo=%u %ux%u srcStatus=0x%04X "
+                        "dstTex=%u dstFbo=%u %ux%u dstStatus=0x%04X rect=%dx%d preError=0x%04X blitError=0x%04X",
+                        state->FrameId, (unsigned)i, (unsigned)source->Name, (unsigned)sourceFbo,
+                        source->Width, source->Height, (unsigned)sourceStatus,
+                        (unsigned)destination->Name, (unsigned)destinationFbo,
+                        destination->Width, destination->Height, (unsigned)destinationStatus,
+                        command.Rect[2], command.Rect[3], (unsigned)preBlitError, (unsigned)blitError);
+                    appendAndroidDiagnostic(diagnostic);
+                    ++blitReports;
+                }
+            }
+#endif
             DeleteTemporaryFbo(sourceTemp);
             DeleteTemporaryFbo(destinationTemp);
             continue;
         }
 
         SdlTarget target = frame->Targets[command.Target];
-        if (!BindTarget(state, target)) continue;
+        if (!BindTarget(state, target)) {
+            ++failedTargetBinds;
+#if defined(__ANDROID__)
+            static unsigned int targetBindReports = 0;
+            if (targetBindReports < 8) {
+                GlesTexture *colour = Gles_Texture(target.Colour);
+                GlesTexture *depth = Gles_Texture(target.Depth);
+                char diagnostic[512];
+                snprintf(diagnostic, sizeof(diagnostic),
+                    "GLES target bind rejected: frame=%u cmd=%u target=%u size=%ux%u colourTex=%u depthTex=%u",
+                    state->FrameId, (unsigned)i, (unsigned)command.Target, target.Width, target.Height,
+                    colour != NULL ? (unsigned)colour->Name : 0u,
+                    depth != NULL ? (unsigned)depth->Name : 0u);
+                appendAndroidDiagnostic(diagnostic);
+                ++targetBindReports;
+            }
+#endif
+            continue;
+        }
 
         if (!command.IsDraw) {
             ++clearCommands;
@@ -717,6 +815,24 @@ bool SdlGpuFrame::Gles_Replay()
                 state, target.Width, target.Height,
                 frame->ConstantBytes.empty() ? NULL : &frame->ConstantBytes[0].Value, frame->ConstantBytes.size())) {
                 ++executedDraws;
+            } else {
+                ++failedDraws;
+#if defined(__ANDROID__)
+                static unsigned int failedDrawReports = 0;
+                if (failedDrawReports < 16) {
+                    const SdlRecordedDraw &failed = frame->Draws[command.Draw];
+                    GlesPipeline *failedPipeline = Gles_Pipeline(failed.Pipeline);
+                    char diagnostic[512];
+                    snprintf(diagnostic, sizeof(diagnostic),
+                        "GLES draw not executed: frame=%u cmd=%u draw=%u program=%u target=%ux%u "
+                        "samplers=%u count=%u indexSize=%u",
+                        state->FrameId, (unsigned)i, (unsigned)command.Draw,
+                        failedPipeline != NULL ? (unsigned)failedPipeline->Program : 0u,
+                        target.Width, target.Height, failed.SamplerCount, failed.Count, failed.IndexSize);
+                    appendAndroidDiagnostic(diagnostic);
+                    ++failedDrawReports;
+                }
+#endif
             }
         }
     }
@@ -762,9 +878,11 @@ bool SdlGpuFrame::Gles_Replay()
         if (reports < 6 || (executedDraws > 0 && !reportedDrawBatch)) {
             char diagnostic[768];
             snprintf(diagnostic, sizeof(diagnostic),
-                "GLES replay: frame=%u commands=%u draws=%u executed=%u skipped=%u clears=%u glError=0x%04X",
+                "GLES replay: frame=%u commands=%u draws=%u executed=%u skipped=%u failedDraws=%u "
+                "blits=%u failedBlits=%u targetBindFailures=%u clears=%u glError=0x%04X",
                 state->FrameId, (unsigned)frame->Commands.size(), drawCommands, executedDraws,
-                skippedDraws, clearCommands, (unsigned)replayError);
+                skippedDraws, failedDraws, blitCommands, failedBlits, failedTargetBinds,
+                clearCommands, (unsigned)replayError);
             appendAndroidDiagnostic(diagnostic);
             ++reports;
             if (executedDraws > 0) reportedDrawBatch = true;
