@@ -164,7 +164,7 @@ bool Gles_Compile_SPIRV_To_GLSLES(const std::vector<unsigned char> &spirv, bool 
                 const unsigned binding = vertex_stage ? 0u : 1u;
                 spvc_compiler_set_decoration(compiler, list[i].id, SpvDecorationBinding, binding);
                 spvc_compiler_unset_decoration(compiler, list[i].id, SpvDecorationDescriptorSet);
-                if (uniform_blocks != NULL && list[i].name != NULL && list[i].name[0] != '\\0')
+                if (uniform_blocks != NULL && list[i].name != NULL && list[i].name[0] != '\0')
                     uniform_blocks->push_back(std::make_pair(std::string(list[i].name), binding));
             }
         }
