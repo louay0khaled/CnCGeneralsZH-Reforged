@@ -928,6 +928,9 @@ RenderResult PosixDevice9::Gpu_Draw(const DrawCall &call)
 		++phases.Rounds;
 		draw.SamplerCount = pixel_program.SamplerSlots;
 		for (unsigned int slot = 0; slot < pixel_program.SamplerSlots; ++slot) {
+#if defined(__ANDROID__)
+			bool feedback_snapshot_slot = false;
+#endif
 			const int texture_stage = pixel_program.SlotTexture[slot];
 			const int sampler_stage = pixel_program.SlotSampler[slot];
 			if (texture_stage < 0 || texture_stage >= SAMPLER_COUNT || sampler_stage < 0 || sampler_stage >= SAMPLER_COUNT) {
@@ -960,6 +963,7 @@ RenderResult PosixDevice9::Gpu_Draw(const DrawCall &call)
 					appendAndroidDiagnostic("GLES FEEDBACK SNAPSHOT: colour attachment copied before composite draw");
 				}
 				draw.Textures[slot] = feedback_copy;
+				feedback_snapshot_slot = true;
 #else
 				// Outside the GLES backend, preserve the original refusal rather than changing desktop D3D9 behaviour.
 				Refuse_Draw("sampling the render target it draws into");
@@ -977,6 +981,20 @@ RenderResult PosixDevice9::Gpu_Draw(const DrawCall &call)
 				Refuse_Draw("the sampler: " + Samplers->Refusal());
 				return D3D_OK;
 			}
+#if defined(__ANDROID__)
+			if (feedback_snapshot_slot) {
+				// Feedback snapshots are one-level RGBA textures. A regular D3D sampler may map
+				// to a GLES mipmapped min-filter, making this texture incomplete and sampling black.
+				// Bind sampler 0 for this slot so the snapshot uses its own non-mipmapped GL_LINEAR
+				// filtering and clamp-to-edge parameters; leave all regular game textures untouched.
+				draw.Samplers[slot] = NULL;
+				static unsigned int reports = 0;
+				if (reports < 8) {
+					appendAndroidDiagnostic("GLES FEEDBACK SNAPSHOT: using texture-owned non-mipmapped sampling");
+					++reports;
+				}
+			}
+#endif
 		}
 		const double buffers_since = phases.Now();
 		if (!stage_vertices) {
