@@ -975,6 +975,9 @@ void SdlGpuFrame::Release_Targets()
     for (size_t i = 0; i < ScratchDepths.size(); ++i)
         Gles_Delete_Texture(ScratchDepths[i].Texture);
     ScratchDepths.clear();
+    for (size_t i = 0; i < FeedbackCopies.size(); ++i)
+        Gles_Delete_Texture(FeedbackCopies[i].Texture);
+    FeedbackCopies.clear();
 }
 
 SdlGpuFrame::~SdlGpuFrame()
@@ -1042,6 +1045,46 @@ SDL_GPUTexture *SdlGpuFrame::Depth_For(unsigned int width, unsigned int height)
     ScratchDepth scratch = { reinterpret_cast<SDL_GPUTexture *>(depth), width, height };
     ScratchDepths.push_back(scratch);
     return scratch.Texture;
+}
+
+SDL_GPUTexture *SdlGpuFrame::Feedback_Copy_For(unsigned int width, unsigned int height)
+{
+    if (width == 0 || height == 0) return NULL;
+    for (size_t i = 0; i < FeedbackCopies.size(); ++i) {
+        if (FeedbackCopies[i].Width == width && FeedbackCopies[i].Height == height)
+            return FeedbackCopies[i].Texture;
+    }
+    // Keep one same-sized texture per target size, reusable across batches. The blit and the
+    // composite draw are recorded in-order, so the snapshot is refreshed immediately before each
+    // feedback draw and remains alive even if an intervening resource update flushes the batch.
+    GlesTexture *copy = MakeColorTexture(width, height);
+    if (copy == NULL) return NULL;
+    FeedbackCopy scratch = { reinterpret_cast<SDL_GPUTexture *>(copy), width, height };
+    FeedbackCopies.push_back(scratch);
+    return scratch.Texture;
+}
+
+void SdlGpuFrame::Log_Feedback_Loop(SDL_GPUTexture *texture, SDL_GPUGraphicsPipeline *pipeline)
+{
+#if defined(__ANDROID__)
+    static unsigned int reports = 0;
+    if (reports >= 16) return;
+    GlesFrameState *state = State(this);
+    const GlesTexture *source = Gles_Texture(texture);
+    const GlesPipeline *program = Gles_Pipeline(pipeline);
+    char diagnostic[512];
+    snprintf(diagnostic, sizeof(diagnostic),
+        "GLES FEEDBACK LOOP: tex=%u fbo=%u prog=%u textureFbo=%u",
+        source != NULL ? (unsigned)source->Name : 0u,
+        state != NULL ? (unsigned)state->TargetFbo : 0u,
+        program != NULL ? (unsigned)program->Program : 0u,
+        source != NULL ? (unsigned)source->Fbo : 0u);
+    appendAndroidDiagnostic(diagnostic);
+    ++reports;
+#else
+    (void)texture;
+    (void)pipeline;
+#endif
 }
 
 void SdlGpuFrame::Record_Blit(SDL_GPUTexture *source, const int32_t source_rect[4], SDL_GPUTexture *destination,
